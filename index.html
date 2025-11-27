@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>お菓子二択ギャラリー（Supabase版）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Supabase JS（CDN） -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 16px;
+      background: #f5f5f5;
+    }
+    h1, h2 {
+      margin: 0 0 8px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+    }
+    label {
+      display: block;
+      font-size: 14px;
+      margin-top: 8px;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 6px 8px;
+      box-sizing: border-box;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      font-size: 14px;
+    }
+    input[type="file"] {
+      margin-top: 4px;
+      font-size: 13px;
+    }
+    button {
+      padding: 8px 14px;
+      border-radius: 999px;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      margin-top: 12px;
+    }
+    button.primary {
+      background: #2563eb;
+      color: #fff;
+    }
+    button.secondary {
+      background: #e5e7eb;
+      color: #111827;
+    }
+    .pair {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 10px;
+      margin-top: 8px;
+      background: #fafafa;
+    }
+    .pair-header {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .flex {
+      display: flex;
+      gap: 8px;
+    }
+    .flex > div {
+      flex: 1;
+    }
+    .hidden {
+      display: none;
+    }
+    .snack-image {
+      max-width: 100%;
+      border-radius: 8px;
+      border: 1px solid #e5e7eb;
+    }
+    .choice-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .choice {
+      flex: 1;
+      border-radius: 10px;
+      border: 2px solid transparent;
+      padding: 8px;
+      background: #fff;
+      cursor: pointer;
+      text-align: center;
+      transition: border-color 0.1s ease, box-shadow 0.1s ease;
+    }
+    .choice:hover {
+      box-shadow: 0 0 0 2px rgba(37,99,235,0.15);
+    }
+    .choice.selected {
+      border-color: #2563eb;
+      box-shadow: 0 0 0 2px rgba(37,99,235,0.2);
+    }
+    .choice-label {
+      font-weight: 600;
+      margin-top: 4px;
+    }
+    .message {
+      font-size: 13px;
+      color: #6b7280;
+      margin-top: 4px;
+      word-break: break-all;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: #e5e7eb;
+      color: #374151;
+      margin-right: 6px;
+    }
+  </style>
+</head>
+<body>
+  <h1>お菓子二択ギャラリー（Supabase Free サンプル）</h1>
+
+  <!-- ビルダー画面（?gallery= が無いときだけ表示） -->
+  <div id="builder" class="card">
+    <h2>① ギャラリー作成</h2>
+    <label>
+      ギャラリーのタイトル（例: お菓子二択バトル）
+      <input type="text" id="galleryTitle" placeholder="お菓子二択バトル">
+    </label>
+
+    <div style="margin-top:12px;">
+      <span class="badge">STEP 1</span> ペア（対戦カード）を追加していく
+    </div>
+    <button id="addPairBtn" class="secondary">＋ ペアを追加</button>
+
+    <div id="pairsContainer"></div>
+
+    <div style="margin-top:12px;">
+      <span class="badge">STEP 2</span> Supabase に保存して共有リンク作成
+    </div>
+    <button id="saveGalleryBtn" class="primary">ギャラリー保存＆共有URLを生成</button>
+    <div id="builderMessage" class="message"></div>
+  </div>
+
+  <!-- ビューア画面（?gallery=xxx で開いたとき） -->
+  <div id="viewer" class="card hidden">
+    <h2 id="viewerTitle">② ギャラリーを見る</h2>
+    <div id="viewerContent"></div>
+    <div id="viewerMessage" class="message"></div>
+  </div>
+
+  <script>
+    // ====== Supabase 設定 ============================================
+    const { createClient } = supabase;
+
+    // TODO: ここを自分のプロジェクトの値に差し替え
+    const SUPABASE_URL = "https://cxqxwqgskhezckinggow.supabase.co";
+    const SUPABASE_ANON_KEY = "sb_publishable_KvO6r5kb_ZU2Nq8qTUmMog_VRcK68yp";
+    const BUCKET_NAME = "snack-images";
+
+    const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // ====== 共通: URL クエリ取得 =======================================
+    const params = new URLSearchParams(window.location.search);
+    const galleryIdFromUrl = params.get("gallery");
+
+    const builderEl = document.getElementById("builder");
+    const viewerEl = document.getElementById("viewer");
+    const pairsContainer = document.getElementById("pairsContainer");
+    const builderMessageEl = document.getElementById("builderMessage");
+    const viewerMessageEl = document.getElementById("viewerMessage");
+
+    let pairCount = 0;
+
+    // ====== ビルダー: ペア追加 =======================================
+    function addPair() {
+      pairCount++;
+      const pairId = `pair-${pairCount}`;
+
+      const wrapper = document.createElement("div");
+      wrapper.className = "pair";
+      wrapper.dataset.pairId = pairId;
+
+      wrapper.innerHTML = `
+        <div class="pair-header">ペア ${pairCount}</div>
+        <label>
+          ペアタイトル（例: アルフォート）
+          <input type="text" class="pair-title" placeholder="アルフォート">
+        </label>
+        <div class="flex">
+          <div>
+            <label>
+              左ラベル（例: ミルクチョコ）
+              <input type="text" class="left-label" placeholder="ミルクチョコ">
+            </label>
+            <label>
+              左画像ファイル
+              <input type="file" class="left-file" accept="image/*">
+            </label>
+          </div>
+          <div>
+            <label>
+              右ラベル（例: リッチミルク）
+              <input type="text" class="right-label" placeholder="リッチミルク">
+            </label>
+            <label>
+              右画像ファイル
+              <input type="file" class="right-file" accept="image/*">
+            </label>
+          </div>
+        </div>
+      `;
+      pairsContainer.appendChild(wrapper);
+    }
+
+    document.getElementById("addPairBtn").addEventListener("click", () => {
+      addPair();
+    });
+
+// ====== 画像リサイズ設定（必要に応じて調整OK） ====================
+    const MAX_WIDTH = 800;      // 長辺の最大ピクセル
+    const MAX_HEIGHT = 800;
+    const OUTPUT_MIME = "image/jpeg"; // jpeg に統一（サイズ小さめ）
+    const OUTPUT_QUALITY = 0.8;       // 0〜1 (0.8くらいで十分きれい)
+
+    // File を canvas 経由でリサイズして Blob にする
+    function resizeImage(file, maxWidth, maxHeight, mimeType = OUTPUT_MIME, quality = OUTPUT_QUALITY) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+    
+        img.onload = () => {
+          URL.revokeObjectURL(url);
+    
+          let { width, height } = img;
+    
+          // 縦横どちらかが max を超えている場合のみ縮小する
+          const scale = Math.min(
+            maxWidth / width,
+            maxHeight / height,
+            1 // 1 未満じゃなければそのまま
+          );
+    
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.round(width * scale);
+          canvas.height = Math.round(height * scale);
+    
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    
+          canvas.toBlob(
+            (blob) => {
+              if (!blob) {
+                reject(new Error("画像のリサイズに失敗しました"));
+                return;
+              }
+              resolve(blob);
+            },
+            mimeType,
+            quality
+          );
+        };
+    
+        img.onerror = (e) => {
+          URL.revokeObjectURL(url);
+          reject(e);
+        };
+    
+        img.src = url;
+      });
+    }
+
+    // ====== Supabase: 画像アップロード（リサイズ付き） ==================
+    async function uploadImage(file, galleryId, pairIndex, side) {
+      // アップロード前にリサイズ
+      const resizedBlob = await resizeImage(file, MAX_WIDTH, MAX_HEIGHT);
+    
+      // ここでは jpeg に統一して .jpg 拡張子を付ける
+      const ext = "jpg";
+      const path = `${galleryId}/${pairIndex}-${side}-${Date.now()}.${ext}`;
+    
+      const { data, error } = await sb.storage
+        .from(BUCKET_NAME)
+        .upload(path, resizedBlob, {
+          contentType: OUTPUT_MIME
+        });
+    
+      if (error) {
+        console.error("upload error", error);
+        throw error;
+      }
+    
+      const { data: publicData } = sb.storage.from(BUCKET_NAME).getPublicUrl(path);
+      return {
+        path,
+        url: publicData.publicUrl
+      };
+    }
+
+    // ====== ビルダー: ギャラリー保存 ================================
+    document.getElementById("saveGalleryBtn").addEventListener("click", async () => {
+      builderMessageEl.textContent = "";
+
+      const galleryTitle = document.getElementById("galleryTitle").value.trim();
+      if (!galleryTitle) {
+        builderMessageEl.textContent = "ギャラリータイトルを入力してください。";
+        return;
+      }
+
+      const pairEls = Array.from(document.querySelectorAll(".pair"));
+      if (pairEls.length === 0) {
+        builderMessageEl.textContent = "少なくとも1つはペアを追加してください。";
+        return;
+      }
+
+      const galleryId = crypto.randomUUID();
+
+      const pairs = [];
+
+      try {
+        for (let i = 0; i < pairEls.length; i++) {
+          const pairEl = pairEls[i];
+          const pairTitle = pairEl.querySelector(".pair-title").value.trim();
+          const leftLabel = pairEl.querySelector(".left-label").value.trim();
+          const rightLabel = pairEl.querySelector(".right-label").value.trim();
+          const leftFileInput = pairEl.querySelector(".left-file");
+          const rightFileInput = pairEl.querySelector(".right-file");
+
+          const leftFile = leftFileInput.files[0];
+          const rightFile = rightFileInput.files[0];
+
+          if (!pairTitle || !leftLabel || !rightLabel || !leftFile || !rightFile) {
+            throw new Error(`ペア ${i + 1} の入力が不足しています。タイトル・ラベル・画像をすべて指定してください。`);
+          }
+
+          // 1枚ずつ Supabase にアップロード
+          const leftUploaded = await uploadImage(leftFile, galleryId, i + 1, "left");
+          const rightUploaded = await uploadImage(rightFile, galleryId, i + 1, "right");
+
+          pairs.push({
+            title: pairTitle,
+            left: {
+              label: leftLabel,
+              imageUrl: leftUploaded.url
+            },
+            right: {
+              label: rightLabel,
+              imageUrl: rightUploaded.url
+            }
+          });
+        }
+
+        const config = {
+          title: galleryTitle,
+          pairs
+        };
+
+        const { data, error } = await sb
+          .from("galleries")
+          .insert({
+            id: galleryId,
+            title: galleryTitle,
+            config
+          })
+          .select("id")
+          .single();
+
+        if (error) {
+          console.error(error);
+          throw error;
+        }
+
+        const shareUrl = `${location.origin}${location.pathname}?gallery=${encodeURIComponent(data.id)}`;
+        builderMessageEl.innerHTML = `保存しました！<br>このURLを友だちに送ってください：<br><a href="${shareUrl}">${shareUrl}</a>`;
+      } catch (err) {
+        console.error(err);
+        builderMessageEl.textContent = `エラーが発生しました: ${err.message || err}`;
+      }
+    });
+
+    // ====== ビューア: ギャラリー読み込み ============================
+    async function loadGallery(galleryId) {
+      viewerMessageEl.textContent = "読み込み中…";
+
+      const { data, error } = await sb
+        .from("galleries")
+        .select("title, config")
+        .eq("id", galleryId)
+        .single();
+
+      if (error || !data) {
+        console.error(error);
+        viewerMessageEl.textContent = "ギャラリーが見つかりませんでした。IDやURLを確認してください。";
+        return;
+      }
+
+      const config = data.config;
+      document.getElementById("viewerTitle").textContent = config.title || data.title || "ギャラリー";
+
+      const container = document.getElementById("viewerContent");
+      container.innerHTML = "";
+
+      config.pairs.forEach((pair, index) => {
+        const pairBox = document.createElement("div");
+        pairBox.className = "pair";
+
+        const header = document.createElement("div");
+        header.className = "pair-header";
+        header.textContent = `ペア ${index + 1}: ${pair.title}`;
+        pairBox.appendChild(header);
+
+        const choiceRow = document.createElement("div");
+        choiceRow.className = "choice-row";
+
+        const leftChoice = document.createElement("div");
+        leftChoice.className = "choice";
+        leftChoice.dataset.side = "left";
+
+        const leftImg = document.createElement("img");
+        leftImg.src = pair.left.imageUrl;
+        leftImg.className = "snack-image";
+        leftImg.alt = pair.left.label;
+        leftChoice.appendChild(leftImg);
+
+        const leftLabel = document.createElement("div");
+        leftLabel.className = "choice-label";
+        leftLabel.textContent = pair.left.label;
+        leftChoice.appendChild(leftLabel);
+
+        const rightChoice = document.createElement("div");
+        rightChoice.className = "choice";
+        rightChoice.dataset.side = "right";
+
+        const rightImg = document.createElement("img");
+        rightImg.src = pair.right.imageUrl;
+        rightImg.className = "snack-image";
+        rightImg.alt = pair.right.label;
+        rightChoice.appendChild(rightImg);
+
+        const rightLabel = document.createElement("div");
+        rightLabel.className = "choice-label";
+        rightLabel.textContent = pair.right.label;
+        rightChoice.appendChild(rightLabel);
+
+        // クリックで選択トグル（片方だけ）
+        const onSelect = (selectedEl, otherEl) => {
+          selectedEl.classList.add("selected");
+          otherEl.classList.remove("selected");
+        };
+
+        leftChoice.addEventListener("click", () => onSelect(leftChoice, rightChoice));
+        rightChoice.addEventListener("click", () => onSelect(rightChoice, leftChoice));
+
+        choiceRow.appendChild(leftChoice);
+        choiceRow.appendChild(rightChoice);
+
+        pairBox.appendChild(choiceRow);
+        container.appendChild(pairBox);
+      });
+
+      viewerMessageEl.textContent = "※ このサンプルでは投票結果は Supabase には保存せず、「どっち選んだか」をその場だけで楽しむモードです。集計までやりたくなったら、別テーブルを作って投票を書き込めば拡張できます。";
+    }
+
+    // ====== 画面切り替え ===========================================
+    if (galleryIdFromUrl) {
+      // URL に ?gallery= があるとき → viewer モード
+      builderEl.classList.add("hidden");
+      viewerEl.classList.remove("hidden");
+      loadGallery(galleryIdFromUrl);
+    } else {
+      // なければビルダーモード
+      builderEl.classList.remove("hidden");
+      viewerEl.classList.add("hidden");
+    }
+  </script>
+</body>
+</html>
