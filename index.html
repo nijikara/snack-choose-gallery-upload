@@ -363,23 +363,24 @@
           pairs
         };
 
-        const { data, error } = await sb
+        const { error } = await sb
           .from("galleries")
           .insert({
             id: galleryId,
             title: galleryTitle,
             config
-          })
-          .select("id")
-          .single();
-
+          });
+        
         if (error) {
           console.error(error);
           throw error;
         }
-
-        const shareUrl = `${location.origin}${location.pathname}?gallery=${encodeURIComponent(data.id)}`;
+        
+        // すでに自分で galleryId を作ってるので、それをそのまま使えばOK
+        const shareUrl = `${location.origin}${location.pathname}?gallery=${encodeURIComponent(galleryId)}`;
+        
         builderMessageEl.innerHTML = `保存しました！<br>このURLを友だちに送ってください：<br><a href="${shareUrl}">${shareUrl}</a>`;
+
       } catch (err) {
         console.error(err);
         builderMessageEl.textContent = `エラーが発生しました: ${err.message || err}`;
