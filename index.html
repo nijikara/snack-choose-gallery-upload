@@ -2,9 +2,8 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>二択ギャラリー（Supabase版 / 投票機能付き）</title>
+  <title>二択ギャラリー（投票・％・名前・画像任意対応）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- Supabase JS（CDN） -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     body {
@@ -86,6 +85,8 @@
       max-width: 100%;
       border-radius: 8px;
       border: 1px solid #e5e7eb;
+      display: block;
+      margin: 0 auto;
     }
     .choice-row {
       display: flex;
@@ -101,6 +102,9 @@
       cursor: pointer;
       text-align: center;
       transition: border-color 0.1s ease, box-shadow 0.1s ease;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
     }
     .choice:hover {
       box-shadow: 0 0 0 2px rgba(37,99,235,0.15);
@@ -109,9 +113,29 @@
       border-color: #2563eb;
       box-shadow: 0 0 0 2px rgba(37,99,235,0.2);
     }
+    .choice-media {
+      min-height: 80px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .text-only-box {
+      border-radius: 8px;
+      border: 1px dashed #d1d5db;
+      padding: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      word-break: break-word;
+      min-height: 80px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
     .choice-label {
       font-weight: 600;
       margin-top: 4px;
+      font-size: 14px;
+      word-break: break-word;
     }
     .message {
       font-size: 13px;
@@ -148,15 +172,15 @@
   </style>
 </head>
 <body>
-  <h1>二択ギャラリー（Supabase版 / 投票付き）</h1>
+  <h1>二択ギャラリー（投票％・名前・画像任意）</h1>
 
-  <!-- 作成済みギャラリー一覧（このブラウザで作った履歴） -->
+  <!-- 作成済みギャラリー一覧 -->
   <div id="myGalleriesCard" class="card">
     <h2>作成済みギャラリー一覧（この端末）</h2>
     <div id="myGalleriesList" class="message">まだこのブラウザではギャラリーを作成していません。</div>
   </div>
 
-  <!-- ビルダー画面（?edit= がないときは新規、あるときは編集モード） -->
+  <!-- ビルダー画面 -->
   <div id="builder" class="card">
     <h2 id="builderHeading">① ギャラリー作成</h2>
     <label>
@@ -165,7 +189,7 @@
     </label>
 
     <div style="margin-top:12px;">
-      <span class="badge">STEP 1</span> ペア（対戦カード）を追加していく
+      <span class="badge">STEP 1</span> ペア（対戦カード）を追加していく（画像なしテキストのみもOK）
     </div>
     <button id="addPairBtn" class="secondary">＋ ペアを追加</button>
 
@@ -178,37 +202,40 @@
     <div id="builderMessage" class="message"></div>
   </div>
 
-  <!-- ビューア画面（?gallery=xxx で開いたとき） -->
+  <!-- ビューア画面 -->
   <div id="viewer" class="card hidden">
     <h2 id="viewerTitle">② ギャラリーを見る・投票する</h2>
+
+    <label>
+      お名前（任意・ゆるい連投チェック用）
+      <input type="text" id="voterName" placeholder="例：たろう">
+    </label>
+
     <div id="viewerContent"></div>
     <div id="viewerMessage" class="message"></div>
   </div>
 
   <script>
-    // ====== アプリ全体の設定 ==========================================
+    // ====== 設定 ==========================================
     const APP_CONFIG = {
       supabase: {
         // ★ここを自分の Supabase プロジェクトに合わせる
-        url: "https://cxqxwqgskhezckinggow.supabase.co",
-        anonKey: "sb_publishable_KvO6r5kb_ZU2Nq8qTUmMog_VRcK68yp",
+        url: "https://YOUR-PROJECT.supabase.co",
+        anonKey: "YOUR-ANON-KEY",
         bucketName: "snack-images",
         votesTable: "votes",
       },
       image: {
-        // 画像の最大サイズ（アップロード時に縮小）
         maxWidth: 200,
         maxHeight: 200,
         mime: "image/jpeg",
         quality: 0.8,
       },
       history: {
-        // このブラウザに保持するギャラリー履歴の最大件数
         maxMyGalleries: 50,
       },
     };
 
-    // ====== Supabase クライアント設定 =================================
     const { createClient } = supabase;
     const SUPABASE_URL = APP_CONFIG.supabase.url;
     const SUPABASE_ANON_KEY = APP_CONFIG.supabase.anonKey;
@@ -217,12 +244,16 @@
 
     const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    // ====== 画像リサイズ設定 ==========================================
     const MAX_WIDTH = APP_CONFIG.image.maxWidth;
     const MAX_HEIGHT = APP_CONFIG.image.maxHeight;
     const OUTPUT_MIME = APP_CONFIG.image.mime;
     const OUTPUT_QUALITY = APP_CONFIG.image.quality;
 
+    // ゆるい連投対策 & 名前保存用
+    const VOTER_NAME_KEY = "snackVoterName";
+    const VOTED_GALLERY_PREFIX = "snackVoted_";
+
+    // ====== 画像リサイズ ==================================
     function resizeImage(file, maxWidth, maxHeight, mimeType = OUTPUT_MIME, quality = OUTPUT_QUALITY) {
       return new Promise((resolve, reject) => {
         const img = new Image();
@@ -235,7 +266,7 @@
           const scale = Math.min(
             maxWidth / width,
             maxHeight / height,
-            1 // もともと小さければそのまま
+            1
           );
 
           const canvas = document.createElement("canvas");
@@ -267,7 +298,6 @@
       });
     }
 
-    // 公開URLから storage.remove 用のパスを抜き出す（フォールバック用）
     function getStoragePathFromPublicUrl(url) {
       try {
         const marker = `/object/public/${BUCKET_NAME}/`;
@@ -281,10 +311,10 @@
       }
     }
 
-    // ====== URL クエリ ================================================
+    // ====== URL パラメータ =================================
     const params = new URLSearchParams(window.location.search);
-    const galleryIdFromUrl = params.get("gallery"); // viewer 用
-    const editGalleryIdFromUrl = params.get("edit"); // 編集モード用
+    const galleryIdFromUrl = params.get("gallery");
+    const editGalleryIdFromUrl = params.get("edit");
 
     const builderEl = document.getElementById("builder");
     const viewerEl = document.getElementById("viewer");
@@ -292,17 +322,15 @@
     const builderMessageEl = document.getElementById("builderMessage");
     const viewerMessageEl = document.getElementById("viewerMessage");
     const builderHeadingEl = document.getElementById("builderHeading");
-
     const myGalleriesListEl = document.getElementById("myGalleriesList");
+    const voterNameInput = document.getElementById("voterName");
 
     let pairCount = 0;
-
-    // viewer 用：現在の選択状態（pairIndex -> 'left' / 'right'）
     let currentSelections = {};
     let viewerPairCount = 0;
     let isSubmittingVote = false;
 
-    // ====== localStorage: このブラウザで作ったギャラリー一覧 ============
+    // ====== localStorage: ギャラリー一覧 ===================
     const MY_GALLERIES_KEY = "mySnackGalleries";
     const MAX_MY_GALLERIES = APP_CONFIG.history.maxMyGalleries;
 
@@ -343,15 +371,6 @@
       const list = loadMyGalleries().filter(g => g.id !== id);
       saveMyGalleries(list);
       renderMyGalleriesList();
-    }
-
-    // ペアの見出し番号を 1,2,3... で振り直す
-    function renumberPairs() {
-      const pairEls = Array.from(document.querySelectorAll(".pair"));
-      pairEls.forEach((el, idx) => {
-        const header = el.querySelector(".pair-header");
-        if (header) header.textContent = `ペア ${idx + 1}`;
-      });
     }
 
     async function hardDeleteGallery(id) {
@@ -490,22 +509,30 @@
         btnRow.appendChild(hardDeleteBtn);
 
         div.appendChild(btnRow);
-
         myGalleriesListEl.appendChild(div);
       });
     }
 
     renderMyGalleriesList();
 
-    // ====== ビルダー: ペア追加 =======================================
+    // ====== ペアの番号振り直し =============================
+    function renumberPairs() {
+      const pairEls = Array.from(document.querySelectorAll(".pair"));
+      pairEls.forEach((el, idx) => {
+        const header = el.querySelector(".pair-header");
+        if (header) header.textContent = `ペア ${idx + 1}`;
+      });
+    }
+
+    // ====== ビルダー: ペア追加 ==============================
     function addPair(existingPair) {
       pairCount++;
       const pairId = `pair-${pairCount}`;
-    
+
       const wrapper = document.createElement("div");
       wrapper.className = "pair";
       wrapper.dataset.pairId = pairId;
-    
+
       if (existingPair) {
         wrapper.dataset.leftUrl = existingPair.left?.imageUrl || "";
         wrapper.dataset.rightUrl = existingPair.right?.imageUrl || "";
@@ -520,7 +547,7 @@
             ? getStoragePathFromPublicUrl(existingPair.right.imageUrl)
             : "");
       }
-    
+
       wrapper.innerHTML = `
         <div class="pair-header">ペア ${pairCount}</div>
         <label>
@@ -534,7 +561,7 @@
               <input type="text" class="left-label" placeholder="ミルクチョコ">
             </label>
             <label>
-              左画像ファイル
+              左画像ファイル（任意）
               <input type="file" class="left-file" accept="image/*">
             </label>
             <div class="left-preview"></div>
@@ -545,22 +572,22 @@
               <input type="text" class="right-label" placeholder="リッチミルク">
             </label>
             <label>
-              右画像ファイル
+              右画像ファイル（任意）
               <input type="file" class="right-file" accept="image/*">
             </label>
             <div class="right-preview"></div>
           </div>
         </div>
       `;
-    
+
       if (existingPair) {
         wrapper.querySelector(".pair-title").value = existingPair.title || "";
         wrapper.querySelector(".left-label").value = existingPair.left?.label || "";
         wrapper.querySelector(".right-label").value = existingPair.right?.label || "";
-    
+
         const leftPrev = wrapper.querySelector(".left-preview");
         const rightPrev = wrapper.querySelector(".right-preview");
-    
+
         if (existingPair.left?.imageUrl) {
           const img = document.createElement("img");
           img.src = existingPair.left.imageUrl;
@@ -576,8 +603,7 @@
           rightPrev.appendChild(img);
         }
       }
-    
-      // ★ ペア削除ボタンを追加
+
       const deleteBtn = document.createElement("button");
       deleteBtn.className = "secondary small";
       deleteBtn.style.marginTop = "8px";
@@ -589,7 +615,7 @@
         }
       });
       wrapper.appendChild(deleteBtn);
-    
+
       pairsContainer.appendChild(wrapper);
       renumberPairs();
     }
@@ -598,7 +624,7 @@
       addPair();
     });
 
-    // ====== Supabase: 画像アップロード（リサイズ付き） ==================
+    // ====== 画像アップロード ================================
     async function uploadImage(file, galleryId, pairIndex, side) {
       const resizedBlob = await resizeImage(
         file,
@@ -610,7 +636,7 @@
       const ext = "jpg";
       const path = `${galleryId}/${pairIndex}-${side}-${Date.now()}.${ext}`;
 
-      const { data, error } = await sb.storage
+      const { error } = await sb.storage
         .from(BUCKET_NAME)
         .upload(path, resizedBlob, {
           contentType: OUTPUT_MIME
@@ -631,7 +657,7 @@
       };
     }
 
-    // ====== ビルダー: ギャラリー保存 ================================
+    // ====== ギャラリー保存 =================================
     document.getElementById("saveGalleryBtn").addEventListener("click", async () => {
       builderMessageEl.textContent = "";
 
@@ -668,7 +694,7 @@
           const existingRightPath = pairEl.dataset.rightPath || "";
 
           if (!pairTitle || !leftLabel || !rightLabel) {
-            throw new Error(`ペア ${i + 1} の入力が不足しています。タイトル・ラベルをすべて指定してください。`);
+            throw new Error(`ペア ${i + 1} の入力が不足しています。タイトル・左右ラベルをすべて指定してください。`);
           }
 
           let leftImageUrl = existingLeftUrl;
@@ -687,21 +713,19 @@
             rightStoragePath = rightUploaded.path;
           }
 
-          if (!leftImageUrl || !rightImageUrl) {
-            throw new Error(`ペア ${i + 1} の画像が不足しています。左右どちらも画像を指定してください。`);
-          }
+          // ※ 画像は任意なのでチェックしない（両方テキストのみもOK）
 
           pairs.push({
             title: pairTitle,
             left: {
               label: leftLabel,
-              imageUrl: leftImageUrl,
-              storagePath: leftStoragePath
+              imageUrl: leftImageUrl || null,
+              storagePath: leftStoragePath || null
             },
             right: {
               label: rightLabel,
-              imageUrl: rightImageUrl,
-              storagePath: rightStoragePath
+              imageUrl: rightImageUrl || null,
+              storagePath: rightStoragePath || null
             }
           });
         }
@@ -736,7 +760,7 @@
       }
     });
 
-    // ====== ビューア: 投票集計読み込み ================================
+    // ====== 投票集計（％込み） =============================
     async function loadVoteSummary(galleryId, pairCount) {
       const summaries = {};
       for (let i = 1; i <= pairCount; i++) {
@@ -756,9 +780,7 @@
 
       (data || []).forEach(row => {
         const idx = row.pair_index;
-        if (!summaries[idx]) {
-          summaries[idx] = { left: 0, right: 0 };
-        }
+        if (!summaries[idx]) summaries[idx] = { left: 0, right: 0 };
         if (row.choice === "left") summaries[idx].left++;
         if (row.choice === "right") summaries[idx].right++;
       });
@@ -771,12 +793,54 @@
         if (total === 0) {
           summaryEl.textContent = "まだ投票はありません。";
         } else {
-          summaryEl.textContent = `左: ${s.left}票 / 右: ${s.right}票（合計 ${total}票）`;
+          const leftPct = Math.round((s.left / total) * 100);
+          const rightPct = Math.round((s.right / total) * 100);
+          summaryEl.textContent =
+            `左: ${s.left}票 (${leftPct}%) / 右: ${s.right}票 (${rightPct}%)（合計 ${total}票）`;
         }
       }
     }
 
-    // ====== ビューア: 投票送信 ========================================
+    // ====== 投票結果リセット ===============================
+    async function resetVotesForGallery() {
+      if (!galleryIdFromUrl) return;
+      if (!confirm("このギャラリーの全ての投票結果をリセットしますか？\n（全ペアの票数が0になります）")) return;
+
+      viewerMessageEl.textContent = "投票結果をリセットしています…";
+
+      try {
+        const { error } = await sb
+          .from(VOTES_TABLE)
+          .delete()
+          .eq("gallery_id", galleryIdFromUrl);
+
+        if (error) {
+          console.error(error);
+          alert("投票結果リセット時にエラーが発生しました:\n" + JSON.stringify(error, null, 2));
+          viewerMessageEl.textContent = "投票結果のリセットに失敗しました。";
+          return;
+        }
+
+        for (let i = 1; i <= viewerPairCount; i++) {
+          const summaryEl = document.querySelector(`.vote-summary[data-pair-index="${i}"]`);
+          if (summaryEl) {
+            summaryEl.textContent =
+              "投票はリセットされました。再度投票するか「投票せずに結果を見る」で表示できます。";
+          }
+        }
+
+        // ゆるい連投フラグも消しておく
+        localStorage.removeItem(VOTED_GALLERY_PREFIX + galleryIdFromUrl);
+
+        viewerMessageEl.textContent = "投票結果をリセットしました。";
+      } catch (e) {
+        console.error(e);
+        alert("投票結果リセット中にエラーが発生しました:\n" + (e.message || e));
+        viewerMessageEl.textContent = "投票結果のリセット中にエラーが発生しました。";
+      }
+    }
+
+    // ====== 投票送信 ======================================
     async function submitVotes() {
       if (!galleryIdFromUrl) return;
 
@@ -786,14 +850,31 @@
         return;
       }
       if (isSubmittingVote) return;
+
+      // ゆるい連投チェック
+      const votedKey = VOTED_GALLERY_PREFIX + galleryIdFromUrl;
+      if (localStorage.getItem(votedKey)) {
+        const cont = confirm("このギャラリーにはすでに投票済みの可能性があります。\nもう一度投票しますか？");
+        if (!cont) {
+          viewerMessageEl.textContent = "投票をキャンセルしました。";
+          return;
+        }
+      }
+
       isSubmittingVote = true;
       viewerMessageEl.textContent = "投票送信中…";
 
       try {
+        const name = voterNameInput?.value.trim() || null;
+        if (name !== null) {
+          localStorage.setItem(VOTER_NAME_KEY, name);
+        }
+
         const rows = keys.map(k => ({
           gallery_id: galleryIdFromUrl,
           pair_index: Number(k),
-          choice: currentSelections[k] // 'left' or 'right'
+          choice: currentSelections[k],
+          voter_name: name
         }));
 
         const { error } = await sb
@@ -805,6 +886,8 @@
           alert("投票の保存でエラーが発生しました:\n" + JSON.stringify(error, null, 2));
           viewerMessageEl.textContent = "投票の保存でエラーが発生しました。";
         } else {
+          // 連投フラグ ON
+          localStorage.setItem(votedKey, "1");
           viewerMessageEl.textContent = "投票ありがとうございます！結果を読み込み中…";
           await loadVoteSummary(galleryIdFromUrl, viewerPairCount);
           viewerMessageEl.textContent = "集計結果を表示しました。";
@@ -818,11 +901,12 @@
       }
     }
 
+    // ====== 投票せずに結果だけ見る ========================
     async function showResultsWithoutVoting() {
       if (!galleryIdFromUrl) return;
-    
+
       viewerMessageEl.textContent = "現在の集計を読み込み中…";
-    
+
       try {
         await loadVoteSummary(galleryIdFromUrl, viewerPairCount);
         viewerMessageEl.textContent = "現在の集計結果を表示しました。";
@@ -833,42 +917,7 @@
       }
     }
 
-    async function resetVotesForGallery() {
-      if (!galleryIdFromUrl) return;
-      if (!confirm("このギャラリーの全ての投票結果をリセットしますか？\n（全ペアの票数が0になります）")) return;
-    
-      viewerMessageEl.textContent = "投票結果をリセットしています…";
-    
-      try {
-        const { error } = await sb
-          .from(VOTES_TABLE)
-          .delete()
-          .eq("gallery_id", galleryIdFromUrl);
-    
-        if (error) {
-          console.error(error);
-          alert("投票結果リセット時にエラーが発生しました:\n" + JSON.stringify(error, null, 2));
-          viewerMessageEl.textContent = "投票結果のリセットに失敗しました。";
-          return;
-        }
-    
-        // 表示中のサマリもリセット表示に変える
-        for (let i = 1; i <= viewerPairCount; i++) {
-          const summaryEl = document.querySelector(`.vote-summary[data-pair-index="${i}"]`);
-          if (summaryEl) {
-            summaryEl.textContent = "投票はリセットされました。再度投票すると結果が表示されます。";
-          }
-        }
-    
-        viewerMessageEl.textContent = "投票結果をリセットしました。";
-      } catch (e) {
-        console.error(e);
-        alert("投票結果リセット中にエラーが発生しました:\n" + (e.message || e));
-        viewerMessageEl.textContent = "投票結果のリセット中にエラーが発生しました。";
-      }
-    }
-
-    // ====== ビューア: ギャラリー読み込み ============================
+    // ====== viewer: ギャラリー読み込み =====================
     async function loadGalleryForView(galleryId) {
       viewerMessageEl.textContent = "読み込み中…";
 
@@ -908,40 +957,66 @@
         const choiceRow = document.createElement("div");
         choiceRow.className = "choice-row";
 
+        // 左
         const leftChoice = document.createElement("div");
         leftChoice.className = "choice";
         leftChoice.dataset.side = "left";
 
-        const leftImg = document.createElement("img");
-        leftImg.src = pair.left.imageUrl;
-        leftImg.className = "snack-image";
-        leftImg.alt = pair.left.label;
-        leftChoice.appendChild(leftImg);
+        const leftMedia = document.createElement("div");
+        leftMedia.className = "choice-media";
 
-        const leftLabel = document.createElement("div");
-        leftLabel.className = "choice-label";
-        leftLabel.textContent = pair.left.label;
-        leftChoice.appendChild(leftLabel);
+        if (pair.left.imageUrl) {
+          const leftImg = document.createElement("img");
+          leftImg.src = pair.left.imageUrl;
+          leftImg.className = "snack-image";
+          leftImg.alt = pair.left.label || "";
+          leftMedia.appendChild(leftImg);
+          leftChoice.appendChild(leftMedia);
 
+          const leftLabel = document.createElement("div");
+          leftLabel.className = "choice-label";
+          leftLabel.textContent = pair.left.label;
+          leftChoice.appendChild(leftLabel);
+        } else {
+          const textBox = document.createElement("div");
+          textBox.className = "text-only-box";
+          textBox.textContent = pair.left.label || "(左)";
+          leftMedia.appendChild(textBox);
+          leftChoice.appendChild(leftMedia);
+        }
+
+        // 右
         const rightChoice = document.createElement("div");
         rightChoice.className = "choice";
         rightChoice.dataset.side = "right";
 
-        const rightImg = document.createElement("img");
-        rightImg.src = pair.right.imageUrl;
-        rightImg.className = "snack-image";
-        rightImg.alt = pair.right.label;
-        rightChoice.appendChild(rightImg);
+        const rightMedia = document.createElement("div");
+        rightMedia.className = "choice-media";
 
-        const rightLabel = document.createElement("div");
-        rightLabel.className = "choice-label";
-        rightLabel.textContent = pair.right.label;
-        rightChoice.appendChild(rightLabel);
+        if (pair.right.imageUrl) {
+          const rightImg = document.createElement("img");
+          rightImg.src = pair.right.imageUrl;
+          rightImg.className = "snack-image";
+          rightImg.alt = pair.right.label || "";
+          rightMedia.appendChild(rightImg);
+          rightChoice.appendChild(rightMedia);
+
+          const rightLabel = document.createElement("div");
+          rightLabel.className = "choice-label";
+          rightLabel.textContent = pair.right.label;
+          rightChoice.appendChild(rightLabel);
+        } else {
+          const textBox = document.createElement("div");
+          textBox.className = "text-only-box";
+          textBox.textContent = pair.right.label || "(右)";
+          rightMedia.appendChild(textBox);
+          rightChoice.appendChild(rightMedia);
+        }
 
         const onSelect = (selectedEl, otherEl, side) => {
           selectedEl.classList.add("selected");
           otherEl.classList.remove("selected");
-          currentSelections[pairIndex] = side; // 'left' or 'right'
+          currentSelections[pairIndex] = side;
         };
 
         leftChoice.addEventListener("click", () => onSelect(leftChoice, rightChoice, "left"));
@@ -955,7 +1030,8 @@
         const summary = document.createElement("div");
         summary.className = "vote-summary";
         summary.dataset.pairIndex = String(pairIndex);
-        summary.textContent = "※ 投票を送信するか「結果を見る」ボタンを押すと結果が表示されます。";
+        summary.textContent =
+          "※ 投票を送信するか「投票せずに結果を見る」を押すと結果が表示されます。";
         pairBox.appendChild(summary);
 
         container.appendChild(pairBox);
@@ -964,36 +1040,35 @@
       if (viewerPairCount > 0) {
         const controlRow = document.createElement("div");
         controlRow.style.marginTop = "12px";
-      
+
         const submitBtn = document.createElement("button");
         submitBtn.className = "primary";
         submitBtn.textContent = "この投票を送信する";
         submitBtn.addEventListener("click", submitVotes);
         controlRow.appendChild(submitBtn);
-      
+
         const resetBtn = document.createElement("button");
         resetBtn.className = "secondary";
         resetBtn.style.marginLeft = "8px";
         resetBtn.textContent = "投票結果をリセット";
         resetBtn.addEventListener("click", resetVotesForGallery);
         controlRow.appendChild(resetBtn);
-      
-        // ★ ここから追加：投票せずに結果を見るボタン
+
         const showResultsBtn = document.createElement("button");
         showResultsBtn.className = "secondary";
         showResultsBtn.style.marginLeft = "8px";
         showResultsBtn.textContent = "投票せずに結果を見る";
         showResultsBtn.addEventListener("click", showResultsWithoutVoting);
         controlRow.appendChild(showResultsBtn);
-      
+
         container.appendChild(controlRow);
       }
 
       viewerMessageEl.textContent =
-      "左右を選んでから「この投票を送信する」を押してください。送信後に結果が表示されます。";
+        "左右を選んでから「この投票を送信する」を押すか、「投票せずに結果を見る」で集計を表示できます。";
     }
 
-    // ====== 編集用: ギャラリー読み込み→ビルダーに流し込み ============
+    // ====== ビルダー: 編集用ロード ========================
     async function loadGalleryForEdit(galleryId) {
       builderMessageEl.textContent = "編集元ギャラリーを読み込み中…";
 
@@ -1022,7 +1097,16 @@
       builderMessageEl.textContent = "編集元を読み込みました。この内容をベースに新しいギャラリーとして保存できます。";
     }
 
-    // ====== 画面切り替え =============================================
+    // ====== 名前の自動入力 =================================
+    function prefillVoterName() {
+      if (!voterNameInput) return;
+      const saved = localStorage.getItem(VOTER_NAME_KEY);
+      if (saved !== null) {
+        voterNameInput.value = saved;
+      }
+    }
+
+    // ====== 初期化 =========================================
     (function init() {
       if (editGalleryIdFromUrl) {
         builderHeadingEl.textContent = "① ギャラリー編集（複製して新URLを作成）";
@@ -1032,6 +1116,7 @@
       } else if (galleryIdFromUrl) {
         builderEl.classList.add("hidden");
         viewerEl.classList.remove("hidden");
+        prefillVoterName();
         loadGalleryForView(galleryIdFromUrl);
       } else {
         builderHeadingEl.textContent = "① ギャラリー作成（新規）";
