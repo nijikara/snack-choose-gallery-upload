@@ -818,6 +818,21 @@
       }
     }
 
+    async function showResultsWithoutVoting() {
+      if (!galleryIdFromUrl) return;
+    
+      viewerMessageEl.textContent = "現在の集計を読み込み中…";
+    
+      try {
+        await loadVoteSummary(galleryIdFromUrl, viewerPairCount);
+        viewerMessageEl.textContent = "現在の集計結果を表示しました。";
+      } catch (e) {
+        console.error(e);
+        viewerMessageEl.textContent = "集計結果の取得に失敗しました。";
+        alert("集計結果取得中にエラーが発生しました:\n" + (e.message || e));
+      }
+    }
+
     async function resetVotesForGallery() {
       if (!galleryIdFromUrl) return;
       if (!confirm("このギャラリーの全ての投票結果をリセットしますか？\n（全ペアの票数が0になります）")) return;
@@ -940,7 +955,7 @@
         const summary = document.createElement("div");
         summary.className = "vote-summary";
         summary.dataset.pairIndex = String(pairIndex);
-        summary.textContent = "※ 自分の投票を送信すると結果が表示されます。";
+        summary.textContent = "※ 投票を送信するか「結果を見る」ボタンを押すと結果が表示されます。";
         pairBox.appendChild(summary);
 
         container.appendChild(pairBox);
@@ -962,6 +977,14 @@
         resetBtn.textContent = "投票結果をリセット";
         resetBtn.addEventListener("click", resetVotesForGallery);
         controlRow.appendChild(resetBtn);
+      
+        // ★ ここから追加：投票せずに結果を見るボタン
+        const showResultsBtn = document.createElement("button");
+        showResultsBtn.className = "secondary";
+        showResultsBtn.style.marginLeft = "8px";
+        showResultsBtn.textContent = "投票せずに結果を見る";
+        showResultsBtn.addEventListener("click", showResultsWithoutVoting);
+        controlRow.appendChild(showResultsBtn);
       
         container.appendChild(controlRow);
       }
