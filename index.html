@@ -314,6 +314,7 @@
       renderMyGalleriesList();
     }
 
+    // このブラウザの履歴（localStorage）からも削除（完全削除専用）
     function deleteMyGallery(id) {
       const list = loadMyGalleries().filter(g => g.id !== id);
       saveMyGalleries(list);
@@ -457,17 +458,6 @@
           alert("URLをコピーしました:\n" + url);
         });
         btnRow.appendChild(copyBtn);
-
-        const deleteBtn = document.createElement("button");
-        deleteBtn.className = "secondary small";
-        deleteBtn.style.marginLeft = "4px";
-        deleteBtn.textContent = "一覧から削除";
-        deleteBtn.addEventListener("click", () => {
-          if (confirm("このギャラリーを一覧から削除しますか？\n（Supabase上のデータは消えません）")) {
-            deleteMyGallery(item.id);
-          }
-        });
-        btnRow.appendChild(deleteBtn);
         
         const hardDeleteBtn = document.createElement("button");
         hardDeleteBtn.className = "secondary small";
