@@ -817,6 +817,41 @@
       }
     }
 
+    async function resetVotesForGallery() {
+      if (!galleryIdFromUrl) return;
+      if (!confirm("このギャラリーの全ての投票結果をリセットしますか？\n（全ペアの票数が0になります）")) return;
+    
+      viewerMessageEl.textContent = "投票結果をリセットしています…";
+    
+      try {
+        const { error } = await sb
+          .from(VOTES_TABLE)
+          .delete()
+          .eq("gallery_id", galleryIdFromUrl);
+    
+        if (error) {
+          console.error(error);
+          alert("投票結果リセット時にエラーが発生しました:\n" + JSON.stringify(error, null, 2));
+          viewerMessageEl.textContent = "投票結果のリセットに失敗しました。";
+          return;
+        }
+    
+        // 表示中のサマリもリセット表示に変える
+        for (let i = 1; i <= viewerPairCount; i++) {
+          const summaryEl = document.querySelector(`.vote-summary[data-pair-index="${i}"]`);
+          if (summaryEl) {
+            summaryEl.textContent = "投票はリセットされました。再度投票すると結果が表示されます。";
+          }
+        }
+    
+        viewerMessageEl.textContent = "投票結果をリセットしました。";
+      } catch (e) {
+        console.error(e);
+        alert("投票結果リセット中にエラーが発生しました:\n" + (e.message || e));
+        viewerMessageEl.textContent = "投票結果のリセット中にエラーが発生しました。";
+      }
+    }
+
     // ====== ビューア: ギャラリー読み込み ============================
     async function loadGalleryForView(galleryId) {
       viewerMessageEl.textContent = "読み込み中…";
@@ -911,12 +946,23 @@
       });
 
       if (viewerPairCount > 0) {
+        const controlRow = document.createElement("div");
+        controlRow.style.marginTop = "12px";
+      
         const submitBtn = document.createElement("button");
         submitBtn.className = "primary";
-        submitBtn.style.marginTop = "12px";
         submitBtn.textContent = "この投票を送信する";
         submitBtn.addEventListener("click", submitVotes);
-        container.appendChild(submitBtn);
+        controlRow.appendChild(submitBtn);
+      
+        const resetBtn = document.createElement("button");
+        resetBtn.className = "secondary";
+        resetBtn.style.marginLeft = "8px";
+        resetBtn.textContent = "投票結果をリセット";
+        resetBtn.addEventListener("click", resetVotesForGallery);
+        controlRow.appendChild(resetBtn);
+      
+        container.appendChild(controlRow);
       }
 
       await loadVoteSummary(galleryId, viewerPairCount);
