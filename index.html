@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>二択ギャラリー</title>
+  <title>二択ギャラリー（Supabase版 / 投票機能付き）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <!-- Supabase JS（CDN） -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -140,10 +140,15 @@
       font-size: 11px;
       color: #6b7280;
     }
+    .vote-summary {
+      font-size: 12px;
+      color: #4b5563;
+      margin-top: 4px;
+    }
   </style>
 </head>
 <body>
-  <h1>二択ギャラリー</h1>
+  <h1>二択ギャラリー（Supabase版 / 投票付き）</h1>
 
   <!-- 作成済みギャラリー一覧（このブラウザで作った履歴） -->
   <div id="myGalleriesCard" class="card">
@@ -175,7 +180,7 @@
 
   <!-- ビューア画面（?gallery=xxx で開いたとき） -->
   <div id="viewer" class="card hidden">
-    <h2 id="viewerTitle">② ギャラリーを見る</h2>
+    <h2 id="viewerTitle">② ギャラリーを見る・投票する</h2>
     <div id="viewerContent"></div>
     <div id="viewerMessage" class="message"></div>
   </div>
@@ -184,10 +189,11 @@
     // ====== アプリ全体の設定 ==========================================
     const APP_CONFIG = {
       supabase: {
-        // ★ここを書き換える
+        // ★ここを自分の Supabase プロジェクトに合わせる
         url: "https://cxqxwqgskhezckinggow.supabase.co",
         anonKey: "sb_publishable_KvO6r5kb_ZU2Nq8qTUmMog_VRcK68yp",
         bucketName: "snack-images",
+        votesTable: "votes",
       },
       image: {
         // 画像の最大サイズ（アップロード時に縮小）
@@ -207,6 +213,7 @@
     const SUPABASE_URL = APP_CONFIG.supabase.url;
     const SUPABASE_ANON_KEY = APP_CONFIG.supabase.anonKey;
     const BUCKET_NAME = APP_CONFIG.supabase.bucketName;
+    const VOTES_TABLE = APP_CONFIG.supabase.votesTable || "votes";
 
     const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -260,6 +267,20 @@
       });
     }
 
+    // 公開URLから storage.remove 用のパスを抜き出す（フォールバック用）
+    function getStoragePathFromPublicUrl(url) {
+      try {
+        const marker = `/object/public/${BUCKET_NAME}/`;
+        const idx = url.indexOf(marker);
+        if (idx === -1) return null;
+        let rel = url.slice(idx + marker.length);
+        rel = rel.split("?")[0].split("#")[0];
+        return rel;
+      } catch {
+        return null;
+      }
+    }
+
     // ====== URL クエリ ================================================
     const params = new URLSearchParams(window.location.search);
     const galleryIdFromUrl = params.get("gallery"); // viewer 用
@@ -275,6 +296,11 @@
     const myGalleriesListEl = document.getElementById("myGalleriesList");
 
     let pairCount = 0;
+
+    // viewer 用：現在の選択状態（pairIndex -> 'left' / 'right'）
+    let currentSelections = {};
+    let viewerPairCount = 0;
+    let isSubmittingVote = false;
 
     // ====== localStorage: このブラウザで作ったギャラリー一覧 ============
     const MY_GALLERIES_KEY = "mySnackGalleries";
@@ -309,39 +335,33 @@
         title: title || "(無題)",
         createdAt: now
       });
-      // 最大件数に制限
       saveMyGalleries(list.slice(0, MAX_MY_GALLERIES));
       renderMyGalleriesList();
     }
 
-    // このブラウザの履歴（localStorage）からも削除（完全削除専用）
     function deleteMyGallery(id) {
       const list = loadMyGalleries().filter(g => g.id !== id);
       saveMyGalleries(list);
       renderMyGalleriesList();
     }
-    
-    // Supabase上のレコード＋画像も含めて完全削除
+
     async function hardDeleteGallery(id) {
       try {
-        // 1. galleries から config を取得
         const { data, error } = await sb
           .from("galleries")
           .select("config")
           .eq("id", id)
           .single();
-    
+
         if (error) {
           console.error(error);
           alert("galleries の取得でエラーが発生しました:\n" + JSON.stringify(error, null, 2));
           return;
         }
-    
-        // 2. 画像パスを集める
+
         let paths = [];
         if (data && data.config && Array.isArray(data.config.pairs)) {
           data.config.pairs.forEach(pair => {
-            // 左
             if (pair.left) {
               if (pair.left.storagePath) {
                 paths.push(pair.left.storagePath);
@@ -350,7 +370,6 @@
                 if (p) paths.push(p);
               }
             }
-            // 右
             if (pair.right) {
               if (pair.right.storagePath) {
                 paths.push(pair.right.storagePath);
@@ -361,43 +380,34 @@
             }
           });
         }
-    
-        // 重複削除（同じURLを二重で削除しないように）
+
         paths = Array.from(new Set(paths));
-    
-        // デバッグ用：消そうとしているパスをコンソールに出す
         console.log("Deleting storage paths:", paths);
-    
-        // 3. ストレージの画像削除
+
         if (paths.length > 0) {
           const { error: storageError } = await sb
             .storage
             .from(BUCKET_NAME)
             .remove(paths);
-    
+
           if (storageError) {
             console.error(storageError);
             alert("画像の削除でエラーが発生しました:\n" + JSON.stringify(storageError, null, 2));
-            // ここで return してもいいし、DB側だけ消す運用でもOK
-            // return;
           }
         }
-    
-        // 4. galleries のレコード削除
+
         const { error: deleteError } = await sb
           .from("galleries")
           .delete()
           .eq("id", id);
-    
+
         if (deleteError) {
           console.error(deleteError);
           alert("galleries の削除でエラーが発生しました:\n" + JSON.stringify(deleteError, null, 2));
           return;
         }
-    
-        // 5. このブラウザの一覧からも削除
+
         deleteMyGallery(id);
-    
         alert("Supabase上のデータと画像を完全に削除しました。");
       } catch (e) {
         console.error(e);
@@ -458,7 +468,7 @@
           alert("URLをコピーしました:\n" + url);
         });
         btnRow.appendChild(copyBtn);
-        
+
         const hardDeleteBtn = document.createElement("button");
         hardDeleteBtn.className = "secondary small";
         hardDeleteBtn.style.marginLeft = "4px";
@@ -476,30 +486,25 @@
       });
     }
 
-    // 初回描画
     renderMyGalleriesList();
 
     // ====== ビルダー: ペア追加 =======================================
     function addPair(existingPair) {
       pairCount++;
       const pairId = `pair-${pairCount}`;
-    
+
       const wrapper = document.createElement("div");
       wrapper.className = "pair";
       wrapper.dataset.pairId = pairId;
-    
+
       if (existingPair) {
         wrapper.dataset.leftUrl = existingPair.left?.imageUrl || "";
         wrapper.dataset.rightUrl = existingPair.right?.imageUrl || "";
-    
-        // 既に storagePath が入っている場合はそれを使う
-        // 古いデータで storagePath がない場合は URL から頑張って推論
         wrapper.dataset.leftPath =
           existingPair.left?.storagePath ||
           (existingPair.left?.imageUrl
             ? getStoragePathFromPublicUrl(existingPair.left.imageUrl)
             : "");
-    
         wrapper.dataset.rightPath =
           existingPair.right?.storagePath ||
           (existingPair.right?.imageUrl
@@ -539,7 +544,6 @@
         </div>
       `;
 
-      // 既存ペアがあるときは値を詰める＋プレビュー表示
       if (existingPair) {
         wrapper.querySelector(".pair-title").value = existingPair.title || "";
         wrapper.querySelector(".left-label").value = existingPair.left?.label || "";
@@ -582,25 +586,25 @@
       );
       const ext = "jpg";
       const path = `${galleryId}/${pairIndex}-${side}-${Date.now()}.${ext}`;
-    
+
       const { data, error } = await sb.storage
         .from(BUCKET_NAME)
         .upload(path, resizedBlob, {
           contentType: OUTPUT_MIME
         });
-    
+
       if (error) {
         console.error("upload error", error);
         throw error;
       }
-    
+
       const { data: publicData } = sb.storage
         .from(BUCKET_NAME)
         .getPublicUrl(path);
-    
+
       return {
-        path,                // ← storage上のパス
-        url: publicData.publicUrl // ← 公開URL
+        path,
+        url: publicData.publicUrl
       };
     }
 
@@ -620,7 +624,6 @@
         return;
       }
 
-      // 編集モードであっても、新しいIDとしてINSERT（元は残す）
       const galleryId = crypto.randomUUID();
       const pairs = [];
 
@@ -636,22 +639,20 @@
           const leftFile = leftFileInput.files[0];
           const rightFile = rightFileInput.files[0];
 
-          // 既存URL（編集モードで読み込んだときにセットされる）
           const existingLeftUrl = pairEl.dataset.leftUrl || "";
           const existingRightUrl = pairEl.dataset.rightUrl || "";
           const existingLeftPath = pairEl.dataset.leftPath || "";
           const existingRightPath = pairEl.dataset.rightPath || "";
-          
-          let leftImageUrl = existingLeftUrl;
-          let rightImageUrl = existingRightUrl;
-          let leftStoragePath = existingLeftPath;
-          let rightStoragePath = existingRightPath;
 
           if (!pairTitle || !leftLabel || !rightLabel) {
             throw new Error(`ペア ${i + 1} の入力が不足しています。タイトル・ラベルをすべて指定してください。`);
           }
 
-          // 新しいファイルが選ばれていたら、それを優先してアップロード
+          let leftImageUrl = existingLeftUrl;
+          let rightImageUrl = existingRightUrl;
+          let leftStoragePath = existingLeftPath;
+          let rightStoragePath = existingRightPath;
+
           if (leftFile) {
             const leftUploaded = await uploadImage(leftFile, galleryId, i + 1, "left");
             leftImageUrl = leftUploaded.url;
@@ -663,7 +664,6 @@
             rightStoragePath = rightUploaded.path;
           }
 
-          // 新規作成でも編集複製でも、最終的にURLが両方埋まっている必要あり
           if (!leftImageUrl || !rightImageUrl) {
             throw new Error(`ペア ${i + 1} の画像が不足しています。左右どちらも画像を指定してください。`);
           }
@@ -704,7 +704,6 @@
 
         const shareUrl = `${location.origin}${location.pathname}?gallery=${encodeURIComponent(galleryId)}`;
 
-        // このブラウザの履歴に追加
         addMyGallery(galleryId, galleryTitle);
 
         builderMessageEl.innerHTML = `保存しました！<br>このURLを友だちに送ってください：<br><a href="${shareUrl}" target="_blank">${shareUrl}</a>`;
@@ -713,6 +712,87 @@
         builderMessageEl.textContent = `エラーが発生しました: ${err.message || err}`;
       }
     });
+
+    // ====== ビューア: 投票集計読み込み ================================
+    async function loadVoteSummary(galleryId, pairCount) {
+      const summaries = {};
+      for (let i = 1; i <= pairCount; i++) {
+        summaries[i] = { left: 0, right: 0 };
+      }
+
+      const { data, error } = await sb
+        .from(VOTES_TABLE)
+        .select("pair_index, choice")
+        .eq("gallery_id", galleryId);
+
+      if (error) {
+        console.error(error);
+        viewerMessageEl.textContent = "投票結果の取得に失敗しました。";
+        return;
+      }
+
+      (data || []).forEach(row => {
+        const idx = row.pair_index;
+        if (!summaries[idx]) {
+          summaries[idx] = { left: 0, right: 0 };
+        }
+        if (row.choice === "left") summaries[idx].left++;
+        if (row.choice === "right") summaries[idx].right++;
+      });
+
+      for (let i = 1; i <= pairCount; i++) {
+        const summaryEl = document.querySelector(`.vote-summary[data-pair-index="${i}"]`);
+        if (!summaryEl) continue;
+        const s = summaries[i];
+        const total = s.left + s.right;
+        if (total === 0) {
+          summaryEl.textContent = "まだ投票はありません。";
+        } else {
+          summaryEl.textContent = `左: ${s.left}票 / 右: ${s.right}票（合計 ${total}票）`;
+        }
+      }
+    }
+
+    // ====== ビューア: 投票送信 ========================================
+    async function submitVotes() {
+      if (!galleryIdFromUrl) return;
+
+      const keys = Object.keys(currentSelections);
+      if (keys.length === 0) {
+        alert("少なくとも1つのペアで左右どちらかを選んでください。");
+        return;
+      }
+      if (isSubmittingVote) return;
+      isSubmittingVote = true;
+      viewerMessageEl.textContent = "投票送信中…";
+
+      try {
+        const rows = keys.map(k => ({
+          gallery_id: galleryIdFromUrl,
+          pair_index: Number(k),
+          choice: currentSelections[k] // 'left' or 'right'
+        }));
+
+        const { error } = await sb
+          .from(VOTES_TABLE)
+          .insert(rows);
+
+        if (error) {
+          console.error(error);
+          alert("投票の保存でエラーが発生しました:\n" + JSON.stringify(error, null, 2));
+          viewerMessageEl.textContent = "投票の保存でエラーが発生しました。";
+        } else {
+          viewerMessageEl.textContent = "投票ありがとうございます！最新の集計に反映しました。";
+          await loadVoteSummary(galleryIdFromUrl, viewerPairCount);
+        }
+      } catch (e) {
+        console.error(e);
+        alert("投票中にエラーが発生しました:\n" + (e.message || e));
+        viewerMessageEl.textContent = "投票中にエラーが発生しました。";
+      } finally {
+        isSubmittingVote = false;
+      }
+    }
 
     // ====== ビューア: ギャラリー読み込み ============================
     async function loadGalleryForView(galleryId) {
@@ -737,13 +817,18 @@
       const container = document.getElementById("viewerContent");
       container.innerHTML = "";
 
+      currentSelections = {};
+      viewerPairCount = (config.pairs || []).length;
+
       (config.pairs || []).forEach((pair, index) => {
+        const pairIndex = index + 1;
+
         const pairBox = document.createElement("div");
         pairBox.className = "pair";
 
         const header = document.createElement("div");
         header.className = "pair-header";
-        header.textContent = `ペア ${index + 1}: ${pair.title}`;
+        header.textContent = `ペア ${pairIndex}: ${pair.title}`;
         pairBox.appendChild(header);
 
         const choiceRow = document.createElement("div");
@@ -779,22 +864,40 @@
         rightLabel.textContent = pair.right.label;
         rightChoice.appendChild(rightLabel);
 
-        const onSelect = (selectedEl, otherEl) => {
+        const onSelect = (selectedEl, otherEl, side) => {
           selectedEl.classList.add("selected");
           otherEl.classList.remove("selected");
+          currentSelections[pairIndex] = side; // 'left' or 'right'
         };
 
-        leftChoice.addEventListener("click", () => onSelect(leftChoice, rightChoice));
-        rightChoice.addEventListener("click", () => onSelect(rightChoice, leftChoice));
+        leftChoice.addEventListener("click", () => onSelect(leftChoice, rightChoice, "left"));
+        rightChoice.addEventListener("click", () => onSelect(rightChoice, leftChoice, "right"));
 
         choiceRow.appendChild(leftChoice);
         choiceRow.appendChild(rightChoice);
 
         pairBox.appendChild(choiceRow);
+
+        const summary = document.createElement("div");
+        summary.className = "vote-summary";
+        summary.dataset.pairIndex = String(pairIndex);
+        summary.textContent = "まだ投票はありません。";
+        pairBox.appendChild(summary);
+
         container.appendChild(pairBox);
       });
 
-      viewerMessageEl.textContent = "※ このサンプルでは投票結果は Supabase には保存せず、「どっち選んだか」をその場だけで楽しむモードです。";
+      if (viewerPairCount > 0) {
+        const submitBtn = document.createElement("button");
+        submitBtn.className = "primary";
+        submitBtn.style.marginTop = "12px";
+        submitBtn.textContent = "この投票を送信する";
+        submitBtn.addEventListener("click", submitVotes);
+        container.appendChild(submitBtn);
+      }
+
+      await loadVoteSummary(galleryId, viewerPairCount);
+      viewerMessageEl.textContent = "左右どちらかを選んで「この投票を送信する」を押すと集計に反映されます。";
     }
 
     // ====== 編集用: ギャラリー読み込み→ビルダーに流し込み ============
@@ -829,39 +932,20 @@
     // ====== 画面切り替え =============================================
     (function init() {
       if (editGalleryIdFromUrl) {
-        // 編集モード
         builderHeadingEl.textContent = "① ギャラリー編集（複製して新URLを作成）";
         builderEl.classList.remove("hidden");
         viewerEl.classList.add("hidden");
         loadGalleryForEdit(editGalleryIdFromUrl);
       } else if (galleryIdFromUrl) {
-        // viewer モード
         builderEl.classList.add("hidden");
         viewerEl.classList.remove("hidden");
         loadGalleryForView(galleryIdFromUrl);
       } else {
-        // 新規作成モード
         builderHeadingEl.textContent = "① ギャラリー作成（新規）";
         builderEl.classList.remove("hidden");
         viewerEl.classList.add("hidden");
       }
     })();
-    
-    // 公開URLから storage.remove 用のパスを抜き出す（フォールバック用）
-    function getStoragePathFromPublicUrl(url) {
-      try {
-        const marker = `/object/public/${BUCKET_NAME}/`;
-        const idx = url.indexOf(marker);
-        if (idx === -1) return null;
-        let rel = url.slice(idx + marker.length); // 例: "galleryId/1-left-xxx.jpg?foo=bar"
-        // クエリやハッシュが付いていたら削る
-        rel = rel.split("?")[0].split("#")[0];
-        return rel;
-      } catch {
-        return null;
-      }
-    }
-
   </script>
 </body>
 </html>
