@@ -345,6 +345,15 @@
       renderMyGalleriesList();
     }
 
+    // ペアの見出し番号を 1,2,3... で振り直す
+    function renumberPairs() {
+      const pairEls = Array.from(document.querySelectorAll(".pair"));
+      pairEls.forEach((el, idx) => {
+        const header = el.querySelector(".pair-header");
+        if (header) header.textContent = `ペア ${idx + 1}`;
+      });
+    }
+
     async function hardDeleteGallery(id) {
       try {
         const { data, error } = await sb
@@ -492,11 +501,11 @@
     function addPair(existingPair) {
       pairCount++;
       const pairId = `pair-${pairCount}`;
-
+    
       const wrapper = document.createElement("div");
       wrapper.className = "pair";
       wrapper.dataset.pairId = pairId;
-
+    
       if (existingPair) {
         wrapper.dataset.leftUrl = existingPair.left?.imageUrl || "";
         wrapper.dataset.rightUrl = existingPair.right?.imageUrl || "";
@@ -511,7 +520,7 @@
             ? getStoragePathFromPublicUrl(existingPair.right.imageUrl)
             : "");
       }
-
+    
       wrapper.innerHTML = `
         <div class="pair-header">ペア ${pairCount}</div>
         <label>
@@ -543,15 +552,15 @@
           </div>
         </div>
       `;
-
+    
       if (existingPair) {
         wrapper.querySelector(".pair-title").value = existingPair.title || "";
         wrapper.querySelector(".left-label").value = existingPair.left?.label || "";
         wrapper.querySelector(".right-label").value = existingPair.right?.label || "";
-
+    
         const leftPrev = wrapper.querySelector(".left-preview");
         const rightPrev = wrapper.querySelector(".right-preview");
-
+    
         if (existingPair.left?.imageUrl) {
           const img = document.createElement("img");
           img.src = existingPair.left.imageUrl;
@@ -567,8 +576,22 @@
           rightPrev.appendChild(img);
         }
       }
-
+    
+      // ★ ペア削除ボタンを追加
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "secondary small";
+      deleteBtn.style.marginTop = "8px";
+      deleteBtn.textContent = "このペアを削除";
+      deleteBtn.addEventListener("click", () => {
+        if (confirm("このペアを削除しますか？")) {
+          wrapper.remove();
+          renumberPairs();
+        }
+      });
+      wrapper.appendChild(deleteBtn);
+    
       pairsContainer.appendChild(wrapper);
+      renumberPairs();
     }
 
     document.getElementById("addPairBtn").addEventListener("click", () => {
