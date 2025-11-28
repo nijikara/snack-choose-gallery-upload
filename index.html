@@ -169,6 +169,13 @@
       color: #4b5563;
       margin-top: 4px;
     }
+    .choice-stats {
+      font-size: 18px;      /* でかめ */
+      font-weight: 700;
+      text-align: center;
+      margin-top: 4px;
+    }
+
   </style>
 </head>
 <body>
@@ -787,16 +794,30 @@
 
       for (let i = 1; i <= pairCount; i++) {
         const summaryEl = document.querySelector(`.vote-summary[data-pair-index="${i}"]`);
-        if (!summaryEl) continue;
+        const leftStatsEl = document.querySelector(
+          `.choice-stats[data-pair-index="${i}"][data-side="left"]`
+        );
+        const rightStatsEl = document.querySelector(
+          `.choice-stats[data-pair-index="${i}"][data-side="right"]`
+        );
+      
         const s = summaries[i];
         const total = s.left + s.right;
+      
         if (total === 0) {
-          summaryEl.textContent = "まだ投票はありません。";
+          if (summaryEl) summaryEl.textContent = "まだ投票はありません。";
+          if (leftStatsEl) leftStatsEl.textContent = "";
+          if (rightStatsEl) rightStatsEl.textContent = "";
         } else {
           const leftPct = Math.round((s.left / total) * 100);
           const rightPct = Math.round((s.right / total) * 100);
-          summaryEl.textContent =
-            `左: ${s.left}票 (${leftPct}%) / 右: ${s.right}票 (${rightPct}%)（合計 ${total}票）`;
+      
+          // 下の細い行は「合計◯票」だけにしてスッキリさせる
+          if (summaryEl) summaryEl.textContent = `合計 ${total}票`;
+      
+          // でか文字は各カードの中に
+          if (leftStatsEl) leftStatsEl.textContent = `${leftPct}%（${s.left}票）`;
+          if (rightStatsEl) rightStatsEl.textContent = `${rightPct}%（${s.right}票）`;
         }
       }
     }
@@ -823,10 +844,19 @@
 
         for (let i = 1; i <= viewerPairCount; i++) {
           const summaryEl = document.querySelector(`.vote-summary[data-pair-index="${i}"]`);
+          const leftStatsEl = document.querySelector(
+            `.choice-stats[data-pair-index="${i}"][data-side="left"]`
+          );
+          const rightStatsEl = document.querySelector(
+            `.choice-stats[data-pair-index="${i}"][data-side="right"]`
+          );
+        
           if (summaryEl) {
             summaryEl.textContent =
               "投票はリセットされました。再度投票するか「投票せずに結果を見る」で表示できます。";
           }
+          if (leftStatsEl) leftStatsEl.textContent = "";
+          if (rightStatsEl) rightStatsEl.textContent = "";
         }
 
         // ゆるい連投フラグも消しておく
@@ -961,10 +991,10 @@
         const leftChoice = document.createElement("div");
         leftChoice.className = "choice";
         leftChoice.dataset.side = "left";
-
+        
         const leftMedia = document.createElement("div");
         leftMedia.className = "choice-media";
-
+        
         if (pair.left.imageUrl) {
           const leftImg = document.createElement("img");
           leftImg.src = pair.left.imageUrl;
@@ -972,27 +1002,37 @@
           leftImg.alt = pair.left.label || "";
           leftMedia.appendChild(leftImg);
           leftChoice.appendChild(leftMedia);
-
+        
+          // 画像があるときだけラベルを別で出す
           const leftLabel = document.createElement("div");
           leftLabel.className = "choice-label";
           leftLabel.textContent = pair.left.label;
           leftChoice.appendChild(leftLabel);
         } else {
+          // 画像なし → 枠の中にドンと文字
           const textBox = document.createElement("div");
           textBox.className = "text-only-box";
           textBox.textContent = pair.left.label || "(左)";
           leftMedia.appendChild(textBox);
           leftChoice.appendChild(leftMedia);
         }
+        
+        // ★ ここが新規：画像(またはテキスト枠)の「下」に配置される
+        const leftStats = document.createElement("div");
+        leftStats.className = "choice-stats";
+        leftStats.dataset.pairIndex = String(pairIndex);
+        leftStats.dataset.side = "left";
+        leftStats.textContent = ""; // 最初は空。集計後に入れる
+        leftChoice.appendChild(leftStats);
 
         // 右
         const rightChoice = document.createElement("div");
         rightChoice.className = "choice";
         rightChoice.dataset.side = "right";
-
+        
         const rightMedia = document.createElement("div");
         rightMedia.className = "choice-media";
-
+        
         if (pair.right.imageUrl) {
           const rightImg = document.createElement("img");
           rightImg.src = pair.right.imageUrl;
@@ -1000,7 +1040,7 @@
           rightImg.alt = pair.right.label || "";
           rightMedia.appendChild(rightImg);
           rightChoice.appendChild(rightMedia);
-
+        
           const rightLabel = document.createElement("div");
           rightLabel.className = "choice-label";
           rightLabel.textContent = pair.right.label;
@@ -1012,6 +1052,13 @@
           rightMedia.appendChild(textBox);
           rightChoice.appendChild(rightMedia);
         }
+        
+        const rightStats = document.createElement("div");
+        rightStats.className = "choice-stats";
+        rightStats.dataset.pairIndex = String(pairIndex);
+        rightStats.dataset.side = "right";
+        rightStats.textContent = "";
+        rightChoice.appendChild(rightStats);
 
         const onSelect = (selectedEl, otherEl, side) => {
           selectedEl.classList.add("selected");
