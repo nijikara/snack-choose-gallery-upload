@@ -1,127 +1,223 @@
 
-# お菓子二択ギャラリー（Supabase版）マニュアル
+# お菓子二択ギャラリー Web アプリ マニュアル
 
-このドキュメントは、  
-「お菓子の二択バトル画像ギャラリー」を作って共有できる Web アプリ  
-（`index.html` 1枚＋Supabase＋GitHub Pages）向けのマニュアルです。
+このドキュメントは、以下の機能を持つ Web アプリのマニュアルです。
 
-- 画像アップロード → Supabase Storage に保存
-- ギャラリー設定 → Supabase Postgres に保存
-- 共有URL → `...?gallery=ID`
-- 編集 → 既存ギャラリーを複製して新URL作成
-- 履歴 → ブラウザごとに localStorage で管理
-- 削除 → Supabaseごと完全削除（オプション）
+- Supabase + GitHub Pages で動く **静的フロントエンドのみ** のアプリ
+- 「お菓子二択」スタイルのギャラリー（複数ペア）を作成・共有
+- 画像つき or 画像なしテキストのみ、どちらでも OK
+- 投票機能（左／右の票数と **％表示**）
+- 投票結果リセット機能
+- 投票せずに結果だけ見る機能
+- 投票者の「お名前」を任意入力（軽い連投チェックに利用）
+- Supabase Storage への画像アップロード（リサイズあり）
+- ギャラリーごとの完全削除（DB + Storage 画像）
+- この端末ごとのギャラリー履歴（localStorage）
 
-を前提としています。
+`index.html` 1 枚＋ Supabase ＋ GitHub Pages だけで完結する構成を想定しています。
 
 ---
 
-## 1. 前提・必要なもの
+## 1. 全体構成と用語
 
-- GitHub アカウント（GitHub Pages を使う）
+### 1.1 全体構成
+
+- **フロントエンド**：`index.html`
+  - JavaScript 内で Supabase JS SDK を利用
+  - GitHub Pages などの静的ホスティングで配信
+- **バックエンド**：Supabase
+  - Postgres テーブル：`galleries`, `votes`
+  - Storage バケット：`snack-images`（例）
+  - Row Level Security（RLS）で anon でも読み書きできるようポリシー設定
+
+### 1.2 主な用語
+
+- **ギャラリー（gallery）**  
+  一つのアンケートセット。タイトルと複数の「ペア（対戦カード）」を持つ。  
+  例：「部署飲み会お菓子アンケート」
+
+- **ペア（pair）**  
+  ギャラリー内の 1 対決。  
+  例：「アルフォート ミルクチョコ vs リッチミルク」
+
+- **左／右（left/right）**  
+  各ペアの片側。ラベルと画像（任意）を持つ。  
+  画像がない場合はテキストのみの枠で表示される。
+
+- **投票（vote）**  
+  1 人のユーザーが「このギャラリーに対して送信した選択セット」。  
+  ユーザーは任意で「お名前」を入力できる。
+
+---
+
+## 2. 必要なもの
+
+- GitHub アカウント（GitHub Pages でホストする場合）
 - Supabase アカウント
-- 任意のテキストエディタ（VSCode 等推奨）
-- ブラウザ（Chrome / Edge など）
+- テキストエディタ（VS Code など）
+- ブラウザ（Chrome, Edge 等）
 
 ---
 
-## 2. Supabase 側の準備
+## 3. Supabase の準備
 
-### 2.1 プロジェクト作成
+### 3.1 プロジェクト作成
 
 1. [Supabase](https://supabase.com/) にログイン
 2. 新規プロジェクトを作成
-3. プロジェクト作成後、**Project Settings → API** を開き、以下をメモ：
-
+3. プロジェクト作成後、**Project Settings → API** を開き、以下を控える
    - **Project URL**（例：`https://xxxx.supabase.co`）
-   - **anon public key**（`anon` と書かれている公開キー）
+   - **anon public key**（クライアントから使ってよい公開キー）
 
-> ⚠️ `service_role` キーはフロントでは絶対に使わないこと
+> ⚠️ `service_role` キーはブラウザから絶対に使わないこと。
 
 ---
 
-### 2.2 Storage バケット作成
+### 3.2 Storage バケット作成
 
 1. 左メニュー **Storage** を開く
 2. **Create bucket** をクリック
-3. 以下のように設定：
-
-   - Bucket name: `snack-images`（任意だが、後述設定と揃える）
-   - Public bucket: **ON**（公開バケットにする）
-
+3. 例として以下のように設定
+   - Bucket name: `snack-images`
+   - Public bucket: ON（公開バケット）
 4. 作成する
+
+以降、このマニュアルでは `snack-images` を例として使用します。
 
 ---
 
-### 2.3 `galleries` テーブル作成
+### 3.3 テーブル `galleries` 作成
 
-1. 左メニュー **Table editor** → **New table**
-2. 以下で作成（SQL で作る場合は次の節参照）：
+#### 3.3.1 スキーマ
 
-   - Schema: `public`
-   - Table name: `galleries`
-   - RLS: 有効（Row Level Security ON）
-   - カラム：
-     - `id` : `uuid`, Primary key
-     - `title` : `text`, Nullable 可
-     - `config` : `jsonb`, Not null
-     - `created_at` : `timestamptz`, Default: `now()`
+`galleries` テーブルはギャラリー本体を保存します。
 
-### 2.4 `galleries` 用 RLS ポリシー
+- **Schema**: `public`
+- **Table name**: `galleries`
+- **RLS**: 有効（ON）
+- カラム定義（例）:
 
-SQL Editor で以下を実行すると、  
-`galleries` への `SELECT / INSERT / DELETE` を anon ロールに開放できます。
+| カラム名    | 型           | 説明                              |
+|------------|--------------|-----------------------------------|
+| id         | uuid         | プライマリキー（アプリ側で UUID 生成） |
+| title      | text         | ギャラリーのタイトル              |
+| config     | jsonb        | ギャラリー全体の設定・ペア情報    |
+| created_at | timestamptz  | 作成日時（デフォルト `now()`）    |
+
+SQL で作成する場合の例：
 
 ```sql
--- SELECT を anon に許可
+create table public.galleries (
+  id uuid primary key,
+  title text,
+  config jsonb not null,
+  created_at timestamptz default now()
+);
+
+alter table public.galleries enable row level security;
+```
+
+#### 3.3.2 RLS ポリシー
+
+ブラウザ（anonロール）からの `select / insert / delete` を許可します。
+
+```sql
+-- SELECT を許可
 create policy "public select galleries"
 on public.galleries
 for select
 to anon
 using (true);
 
--- INSERT を anon に許可
+-- INSERT を許可
 create policy "public insert galleries"
 on public.galleries
 for insert
 to anon
 with check (true);
 
--- DELETE を anon に許可（完全削除機能を使う場合）
+-- DELETE を許可（完全削除機能で使用）
 create policy "public delete galleries"
 on public.galleries
 for delete
 to anon
 using (true);
-````
-
-※ 開発中は `galleries` の RLS を OFF にしても動きますが、
-　本番運用を意識するなら ON ＋ポリシーが推奨です。
+```
 
 ---
 
-### 2.5 Storage（`storage.objects`）用 RLS ポリシー
+### 3.4 テーブル `votes` 作成
 
-画像アップロード・閲覧・削除のために、`storage.objects` にもポリシーが必要です。
+投票結果を保存するテーブルです。
 
-SQL Editor で以下を実行：
+#### 3.4.1 スキーマ
 
 ```sql
--- snack-images バケット内の画像の「閲覧」を anon に許可
+create table public.votes (
+  id uuid primary key default gen_random_uuid(),
+  gallery_id uuid not null references public.galleries(id) on delete cascade,
+  pair_index integer not null,
+  choice text not null check (choice in ('left','right')),
+  voter_name text,
+  created_at timestamptz default now()
+);
+
+alter table public.votes enable row level security;
+```
+
+- `gallery_id` : どのギャラリーへの投票か
+- `pair_index` : 何番目のペアか（1, 2, 3, ...）
+- `choice` : `'left'` または `'right'`
+- `voter_name` : 投票者名（任意・null 可）
+- `on delete cascade` により、ギャラリー削除時にそのギャラリーの投票も自動削除されます。
+
+#### 3.4.2 RLS ポリシー
+
+```sql
+-- 結果の読み取り
+create policy "public select votes"
+on public.votes
+for select
+to anon
+using (true);
+
+-- 投票の追加
+create policy "public insert votes"
+on public.votes
+for insert
+to anon
+with check (true);
+
+-- 投票のリセット（削除）
+create policy "public delete votes"
+on public.votes
+for delete
+to anon
+using (true);
+```
+
+---
+
+### 3.5 Storage（`storage.objects`）用 RLS
+
+画像のアップロード・閲覧・削除に必要です。
+
+```sql
+-- 閲覧
 create policy "public read snack-images"
 on storage.objects
 for select
 to anon
 using (bucket_id = 'snack-images');
 
--- snack-images バケット内の画像の「アップロード」を anon に許可
+-- アップロード
 create policy "public upload snack-images"
 on storage.objects
 for insert
 to anon
 with check (bucket_id = 'snack-images');
 
--- snack-images バケット内の画像の「削除」を anon に許可（完全削除機能を使う場合）
+-- 削除（完全削除機能で使用）
 create policy "public delete snack-images"
 on storage.objects
 for delete
@@ -129,24 +225,29 @@ to anon
 using (bucket_id = 'snack-images');
 ```
 
-> ⚠️ `bucket_id` はバケット名に合わせて変更してください
-> 本マニュアルでは `snack-images` を前提にしています。
+> バケット名を `snack-images` 以外にした場合は、`bucket_id` を合わせて変更してください。
 
 ---
 
-## 3. `index.html` の設置
+## 4. `index.html` の配置と設定
 
-1. 手元で任意のフォルダを作成（例：`snack-gallery`）
-2. その中に `index.html` を作り、チャットで渡された最新版コードを貼り付け
-3. コード内の `APP_CONFIG` を自分の環境に合わせて修正：
+### 4.1 ファイル配置
+
+1. 任意のフォルダを作成（例：`snack-gallery`）
+2. その中に `index.html` を配置
+3. ChatGPT で生成した最新版の HTML コードを貼り付け
+
+### 4.2 APP_CONFIG の設定
+
+`index.html` 内の `APP_CONFIG` を Supabase プロジェクトに合わせて変更します。
 
 ```js
 const APP_CONFIG = {
   supabase: {
-    // ★ここを自分の Supabase プロジェクトに合わせる
     url: "https://YOUR-PROJECT.supabase.co",
     anonKey: "YOUR-ANON-KEY",
     bucketName: "snack-images",
+    votesTable: "votes",
   },
   image: {
     maxWidth: 200,
@@ -160,233 +261,332 @@ const APP_CONFIG = {
 };
 ```
 
-* `url`：Supabase の Project URL
-* `anonKey`：`anon public` キー
-* `bucketName`：作成した Storage バケット名（例：`snack-images`）
-* `image.maxWidth / maxHeight`：アップロード時に縮小する最大サイズ（px）
-* `history.maxMyGalleries`：このブラウザに保持するギャラリー履歴の最大件数
+- `url` : Supabase Project URL
+- `anonKey` : anon public key
+- `bucketName` : 作成したバケット名
+- `votesTable` : 投票テーブル名（デフォルト `votes`）
+- 画像の最大サイズ（px）と JPEG 品質を `image` セクションで調整可能
+- `history.maxMyGalleries` はこのブラウザで保持するギャラリー履歴の最大件数
 
 ---
 
-## 4. GitHub Pages へのデプロイ
-
-### 4.1 リポジトリ作成
+## 5. GitHub Pages へのデプロイ（任意）
 
 1. GitHub で新しいリポジトリを作成（例：`snack-gallery`）
-2. `index.html` をリポジトリのルートに配置して push
-
-### 4.2 GitHub Pages 設定
-
-1. GitHub のリポジトリページを開く
-
-2. 上部の **Settings** → 左メニュー **Pages**
-
-3. **Source** を設定：
-
-   * Branch: `main`（または `master`）
-   * Folder: `/ (root)`
-
-4. 保存すると、少し時間をおいて
-
-   * `https://ユーザー名.github.io/リポジトリ名/`
-
-   で `index.html` が公開されます。
+2. `index.html` をルートに push
+3. リポジトリの **Settings → Pages** で
+   - Source: `main`（または `master`）
+   - Folder: `/ (root)`
+   を選択して保存
+4. しばらくすると、
+   - `https://<ユーザー名>.github.io/<リポジトリ名>/`
+   で `index.html` が公開される
 
 ---
 
-## 5. アプリの使い方
+## 6. 画面構成
 
-### 5.1 画面構成
+### 6.1 作成済みギャラリー一覧（この端末）
 
-* **作成済みギャラリー一覧（この端末）**
+- このブラウザで作成・保存したギャラリーの履歴を表示
+- localStorage (`mySnackGalleries`) に保存されている内容をもとに描画
+- 各ギャラリー行に以下のボタンがある：
+  - **開く（投票画面）** : `...?gallery=ID` を別タブで開く
+  - **編集する（複製）** : `...?edit=ID` としてビルダーに読み込む
+  - **URLコピー** : 共有 URL をクリップボードにコピー
+  - **完全削除（DB+画像）** : Supabase 上の `galleries` レコード・関連画像を削除し、localStorage からも履歴を削除
 
-  * このブラウザで「保存」したギャラリーの履歴（localStorage）
-  * 開く／編集（複製）／URLコピー／完全削除
-* **ギャラリー作成・編集画面**
+> 「完全削除」は元データ・画像をすべて削除します。取り消し不可。
 
-  * 新規作成 or 既存ギャラリーを読み込んで編集（複製）
-* **ギャラリー閲覧画面**
+### 6.2 ビルダー画面（ギャラリー作成・編集）
 
-  * `...?gallery=ID` で開く閲覧・投票用画面
+- `?edit` パラメータの有無でモードが変わる
+  - パラメータなし：**新規作成モード**
+  - `?edit=ギャラリーID`：**編集モード（複製として新規保存）**
+- 入力項目：
+  - ギャラリータイトル
+  - 任意個数の「ペア」
 
----
+各ペアには以下を設定：
 
-### 5.2 ギャラリーを新規作成する
+- ペアタイトル（例：アルフォート）
+- 左ラベル（例：ミルクチョコ）
+- 左画像（任意）
+- 右ラベル（例：リッチミルク）
+- 右画像（任意）
 
-1. `index.html`（GitHub Pages の URL）を通常アクセスする
-   → クエリがない状態（例：`...?gallery=xxx` が付いていない）
-2. 「① ギャラリー作成（新規）」カードが表示される
-3. 入力項目：
+その他：
 
-   * ギャラリータイトル（例：「お菓子二択バトル」）
-   * 「＋ ペアを追加」ボタンを押す
+- 「＋ ペアを追加」ボタンで対決カードを増やす
+- **「このペアを削除」ボタン**で任意のペアを削除可能
+- ペア削除後は自動で「ペア 1, 2, 3,...」と番号が振り直される
 
-     * ペアタイトル（例：アルフォート）
-     * 左ラベル（例：ミルクチョコ）
-     * 左画像ファイル（ローカル画像）
-     * 右ラベル（例：リッチミルク）
-     * 右画像ファイル
-   * ペアは複数追加可能
-4. 入力が終わったら
-   → **「ギャラリー保存＆共有URLを生成」** を押す
-5. 保存成功すると、下部に「このURLを友だちに送ってください」として
-   `...?gallery=UUID` 形式の共有URLが表示される
-6. 同時に「作成済みギャラリー一覧」にも履歴として追加される
+**画像について：**  
+画像は任意です。
 
-> 補足：画像はアップロード時に最大 200x200 の JPEG にリサイズされてから
-> Supabase Storage に保存されます。
+- 両方画像あり → 通常の画像対決
+- 一方または両方画像なし → テキストのみボックスで表示
 
----
+### 6.3 ビューア画面（投票）
 
-### 5.3 共有URLを送って使ってもらう
+`...?gallery=ギャラリーID` で表示される画面です。
 
-* 5.2 で表示された URL をコピーして、友人に送る
-* 相手はそのURLを開くだけで、
-  → 画像＋ラベル付きの「どっち派？」画面が表示される
-* 画像をタップ／クリックすると、選んだほうが枠で選択状態になる
-  （このサンプルでは「選択状態をその場で楽しむ」モードで、投票結果はサーバー保存していません）
-
----
-
-### 5.4 作成済みギャラリー一覧（この端末）
-
-トップの「作成済みギャラリー一覧」には、
-**このブラウザで保存したギャラリー**が表示されます（localStorage）。
-
-1件ごとに以下の情報・ボタンがあります：
-
-* タイトル
-* ID / 作成日時
-* **開く（投票画面）**
-
-  * 別タブで `...?gallery=ID` を開く
-* **編集する（複製）**
-
-  * `...?edit=ID` として開く（ビルダーに読み込み）
-  * 編集後に保存すると「新しいID」としてギャラリーが作成される
-* **URLコピー**
-
-  * `...?gallery=ID` のURLをクリップボードにコピー
-* **完全削除（DB+画像）**
-
-  * Supabase 上の `galleries` レコード＋Storage の画像ファイルも削除
-  * 共有URLからもアクセス不可になる
-  * 最後に localStorage の履歴も削除
+- 画面上部：
+  - ギャラリータイトル
+  - 「お名前（任意）」入力欄
+- 中央：
+  - 各ペアのカード
+- 下部：
+  - 「この投票を送信する」
+  - 「投票結果をリセット」
+  - 「投票せずに結果を見る」
 
 ---
 
-### 5.5 ギャラリーを編集（複製）する
+## 7. ギャラリー作成の流れ
 
-1. 「作成済みギャラリー一覧」の対象の行で **「編集する（複製）」** を押す
-   → URL が `...?edit=ID` の形で読み込まれる
-2. ギャラリー作成画面に、既存の：
+1. `index.html`（または GitHub Pages の URL）にアクセス
+2. 画面上部の「① ギャラリー作成」で
+   - タイトルを入力
+   - 必要な数だけペアを追加し、タイトル・ラベル・（必要であれば）画像を設定
+3. 入力完了後、**「ギャラリー保存＆共有URLを生成」** を押す
+4. Supabase に以下が保存される：
+   - `galleries.id` : UUID
+   - `galleries.title` : ギャラリータイトル
+   - `galleries.config` : ペアと画像 URL を含む JSON
+5. 画面下部に共有 URL（`...?gallery=ID`）が表示される
+6. 同時に localStorage の「作成済みギャラリー一覧」にも履歴が追加される
 
-   * ギャラリータイトル
-   * 各ペアのタイトル
-   * ラベル
-   * 画像プレビュー
-     が自動でセットされる
-3. テキストを修正したり、一部の画像を差し替えたりして編集
-4. 「ギャラリー保存＆共有URLを生成」を押すと：
+### 7.1 画像アップロードとリサイズ
 
-   * 新しい UUID が採番され
-   * 新規ギャラリーとして Supabase に INSERT
-   * 新しい共有URLが発行される
-   * 「作成済みギャラリー一覧」にも新しいギャラリーとして追加される
+- ファイル選択時、JavaScript で画像をリサイズ：
+  - 最大サイズ：`maxWidth` × `maxHeight`（デフォルト 200 × 200）
+  - フォーマット：JPEG
+  - 品質：`quality`（デフォルト 0.8）
+- リサイズ済み画像を Supabase Storage の指定バケットにアップロード
+- アップロードパス例：  
+  `galleryId/1-left-タイムスタンプ.jpg`
+- `config` には以下を保存：
+  - `imageUrl` : 公開 URL
+  - `storagePath` : バケット内パス（削除時に使用）
 
-> 元のギャラリーは残り、新旧2つのURLが並存します。
+画像なしの場合：
 
----
-
-### 5.6 完全削除（DB＋画像）について
-
-「作成済みギャラリー一覧」の「完全削除（DB+画像）」ボタンは、
-
-1. `galleries` から対象IDの `config` を取得
-2. `config.pairs[].left.imageUrl / right.imageUrl` から
-   Supabase Storage のパスを抽出
-3. Storage から該当パスのファイルを削除
-4. `galleries` から該当行を DELETE
-5. localStorage の履歴も削除
-
-という流れで、「そのギャラリーに関する全てのサーバー側データ」を削除します。
-
-> この操作は取り消せません。
-> 本当に不要なギャラリーだけに使ってください。
+- ファイル未選択で保存すると `imageUrl` は `null`、`storagePath` も `null`
+- viewer ではテキストのみの箱として表示される
 
 ---
 
-## 6. 設定を変えたいとき
+## 8. ギャラリー編集（複製）
 
-### 6.1 画像サイズ・品質を変える
+### 8.1 編集モードへの入り方
 
-`APP_CONFIG.image` を編集：
+- 「作成済みギャラリー一覧」の行で「編集する（複製）」を押す
+- URL が `...?edit=ギャラリーID` になり、ビルダー画面が
+  - ギャラリータイトル
+  - 既存のペア
+  - 画像プレビュー
+  付きで読み込まれる
 
-```js
-image: {
-  maxWidth: 200,
-  maxHeight: 200,
-  mime: "image/jpeg",
-  quality: 0.8,
-},
+### 8.2 編集〜新規保存
+
+- テキスト修正・画像差し替え・ペア削除・ペア追加など任意に行う
+- 「ギャラリー保存＆共有URLを生成」を押すと：
+  - **新しい UUID** で `galleries` に `insert`
+  - 共有 URL も新しく発行
+  - 「作成済みギャラリー一覧」にも新しいギャラリーとして追加
+
+元のギャラリーはそのまま残ります。
+
+---
+
+## 9. 投票機能の詳細
+
+### 9.1 投票画面の操作
+
+1. 共有 URL（`...?gallery=ID`）を開く
+2. 必要であれば、上部の「お名前（任意）」に投票者名を入力
+   - 入力した名前は localStorage に保存され、同じブラウザで再利用される
+3. 各ペアについて、左または右のいずれかをクリック（タップ）
+   - 選択した側に枠が付き、ハイライト表示
+   - 選択は何度でも切り替え可能（最後の状態が採用される）
+4. 投票を確定するときは **「この投票を送信する」** を押す
+
+### 9.2 投票送信時の挙動
+
+- 送信ボタン押下時：
+  - `currentSelections` に入っているペアだけが投票として送信される
+  - 1 ペアも選んでいない場合はエラー表示
+- 軽い連投チェック：
+  - localStorage に `snackVoted_<galleryId>` というフラグが残る
+  - 2 回目以降の投票時には
+    - 「このギャラリーにはすでに投票済みの可能性があります。もう一度投票しますか？」
+    - という確認ダイアログが表示される（キャンセル可能）
+- votes テーブルへの保存内容：
+  - `gallery_id` : 対象ギャラリー ID
+  - `pair_index` : ペア番号（1, 2, ...）
+  - `choice` : `'left'` or `'right'`
+  - `voter_name` : 名前欄に入力した文字列（未入力なら null）
+
+### 9.3 投票結果の表示（％計算）
+
+投票送信後、または「投票せずに結果を見る」押下後に、  
+`votes` テーブルから対象ギャラリーの全投票を集計します。
+
+- 各ペアについて：
+  - `leftVotes` : `choice='left'` の件数
+  - `rightVotes` : `choice='right'` の件数
+  - `total = leftVotes + rightVotes`
+- パーセンテージ計算：
+  - `leftPct = round(leftVotes / total * 100)`
+  - `rightPct = round(rightVotes / total * 100)`
+
+表示例：
+
+```text
+左: 3票 (60%) / 右: 2票 (40%)（合計 5票）
 ```
 
-* 例：画像をもう少し大きくしたい → `maxWidth / maxHeight` を 400 にする
-* 例：もっと軽くしたい → `quality` を 0.7 に下げる
+投票が 0 件の場合：
 
-### 6.2 履歴件数を変える
-
-```js
-history: {
-  maxMyGalleries: 50,
-},
+```text
+まだ投票はありません。
 ```
 
-* 例：履歴を10件だけにしたい → `10` に変更
+### 9.4 結果表示タイミング
+
+- ページ読み込み直後：
+  - 各ペアの下には
+    - 「※ 投票を送信するか『投票せずに結果を見る』を押すと結果が表示されます。」
+    - という説明文のみ表示
+  - 票数や％は表示されない
+- 「この投票を送信する」押下後：
+  - insert 成功後に集計を読み込み、票数・％を表示
+- 「投票せずに結果を見る」押下後：
+  - insert はせず、既存の votes のみで集計表示
 
 ---
 
-## 7. よくあるトラブルと対処
+## 10. 投票結果のリセット
 
-### 7.1 「new row violates row-level security policy」が出る
+### 10.1 リセットボタン
 
-RLS（Row Level Security）に引っかかっているときのエラーです。
+ビューア画面の下部にある **「投票結果をリセット」** ボタンで、  
+そのギャラリーに紐づく `votes` を全削除できます。
 
-* 画像アップロード時に出る場合
+### 10.2 挙動
 
-  * `storage.objects` の `INSERT / DELETE / SELECT` ポリシーが不足している
-  * このマニュアル「2.5 Storage用 RLS ポリシー」を再確認
-* ギャラリー保存時（DB挿入）に出る場合
+1. 確認ダイアログ表示
+2. `votes` テーブルに対して：
 
-  * `galleries` の `INSERT / SELECT / DELETE` ポリシーが不足している
-  * このマニュアル「2.4 galleries 用 RLS ポリシー」を再確認
+```sql
+delete from public.votes
+where gallery_id = :current_gallery_id;
+```
 
-開発中にどうしても切り分けたい場合は、
-
-* 一時的に `galleries` の RLS を OFF にして挙動を見る
-* Storage 側のポリシーを別途調整する
-
-など、原因のテーブルを切り分けると理解しやすいです。
-
----
-
-## 8. 拡張のアイデア
-
-このサンプルは「投票結果は保存せず、選択状態をその場で楽しむ」仕様ですが、
-さらにやりたくなってきたときに考えられる拡張：
-
-* 投票結果を保存する `votes` テーブルを追加
-
-  * `gallery_id`, `pair_index`, `choice`, `session_id`, `created_at` など
-* 集計画面を追加して、「何人がどっちを選んだか」を可視化
-* 1ギャラリーあたりの最大ペア数を `APP_CONFIG` で制限
-* ギャラリー作成者を識別する簡易な認証（Supabase Auth）　など
+3. リセット後：
+   - 各ペアのサマリ表示は
+     - 「投票はリセットされました。再度投票するか『投票せずに結果を見る』で表示できます。」
+   - localStorage の `snackVoted_<galleryId>` も削除（連投フラグ解除）
 
 ---
 
-## 9. ライセンス・注意事項
+## 11. 完全削除（DB + 画像）
 
-* このアプリは、あくまで個人的な遊び・企画用途を想定しています。
-* 画像は著作権などに配慮し、利用してよいものだけをアップロードしてください。
-* Supabase の無料枠を超えないよう、ときどき Storage の容量を確認し、
-  不要なギャラリーは「完全削除」で掃除することをおすすめします。
+### 11.1 ボタンの配置
+
+- 「作成済みギャラリー一覧（この端末）」の各ギャラリー行に  
+  **「完全削除（DB+画像）」** ボタンがある
+
+### 11.2 挙動の流れ
+
+1. `galleries` から、対象 ID の `config` を取得
+2. `config.pairs[*].left.storagePath` / `right.storagePath` を収集
+   - `storagePath` がない古いデータの場合は、`imageUrl` からパスを推測
+3. Supabase Storage の削除 API：
+
+```js
+sb.storage.from(bucketName).remove(paths);
+```
+
+4. `galleries` から対象レコードを削除：
+
+```js
+delete from public.galleries where id = :id;
+```
+
+5. `votes.gallery_id` は `on delete cascade` により自動的に削除
+6. localStorage の履歴からも該当ギャラリーを削除
+
+> この操作は元に戻せません。注意して実行してください。
+
+---
+
+## 12. localStorage の使い道
+
+ブラウザごとに、以下の情報を localStorage に保存しています。
+
+- `mySnackGalleries`  
+  このブラウザで作成・保存したギャラリー一覧  
+  （ID, タイトル, 作成日時）
+
+- `snackVoterName`  
+  viewer 上部の「お名前（任意）」入力欄の内容  
+  → 次回同ギャラリー以外でも自動入力される
+
+- `snackVoted_<galleryId>`  
+  そのギャラリーに一度投票したことがあるかどうかのフラグ  
+  → 2 回目以降の投票時に警告ダイアログ表示に利用
+
+これらはユーザー自身のブラウザ内だけで完結し、サーバーには保存されません。
+
+---
+
+## 13. トラブルシューティング
+
+### 13.1 `new row violates row-level security policy`
+
+RLS によって操作がブロックされている場合の典型的なエラーです。
+
+- 画像アップロードで出る場合：
+  - `storage.objects` の `insert / delete / select` ポリシーを確認
+  - バケット名 (`bucket_id`) が実際のバケット名と一致しているか
+
+- ギャラリー保存で出る場合：
+  - `galleries` テーブルの `insert / select / delete` ポリシーを確認
+
+- 投票関連で出る場合：
+  - `votes` テーブルの `insert / select / delete` ポリシーを確認
+
+### 13.2 画像が削除されない
+
+完全削除実行後も画像が Storage に残っている場合：
+
+- `storagePath` の保存・復元処理に問題がないか確認
+- 古いギャラリーで `storagePath` がない場合、`imageUrl` からのパス推測がうまくいっているか
+- Storage の delete ポリシーが正しく設定されているか
+
+### 13.3 GitHub Pages で Supabase に接続できない
+
+- `APP_CONFIG.supabase.url`／`anonKey` が正しいか再確認
+- ブラウザの DevTools の Network タブで CORS エラーが出ていないか確認
+- ローカルで `file:///` 経由で開いた場合、挙動が不安定になることがあるので、基本は HTTP 経由（簡易ローカルサーバーか GitHub Pages）で確認する
+
+---
+
+## 14. 拡張アイデア（メモ）
+
+今後追加を検討できる機能例：
+
+- ペア順のランダム出題
+- 投票完了後の「あなたの傾向」診断表示（甘党／しょっぱい派 など）
+- 接戦ランキング（差が少ないペア順に並べる）
+- 投票締切日時付きギャラリー
+- 結果の CSV ダウンロード
+
+実装時には、本マニュアルにセクションを追加していく運用を想定しています。
+
+---
+
+以上が、現状の実装を前提とした `.md` 形式のマニュアルです。  
+`README.md` としてリポジトリのルートに置くと、あとから見返しやすくなります。
