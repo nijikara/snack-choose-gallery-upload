@@ -319,6 +319,75 @@
       saveMyGalleries(list);
       renderMyGalleriesList();
     }
+    
+    // Supabase上のレコード＋画像も含めて完全削除
+    async function hardDeleteGallery(id) {
+      try {
+        // 1. galleries から設定を取得（画像URLを取る）
+        const { data, error } = await sb
+          .from("galleries")
+          .select("config")
+          .eq("id", id)
+          .single();
+    
+        if (error) {
+          console.error(error);
+          alert("galleries の取得でエラーが発生しました:\n" + JSON.stringify(error, null, 2));
+          return;
+        }
+    
+        // 2. config から imageUrl を集めて storage パス配列を作成
+        let paths = [];
+        if (data && data.config && Array.isArray(data.config.pairs)) {
+          data.config.pairs.forEach(pair => {
+            if (pair.left?.imageUrl) {
+              const p = getStoragePathFromPublicUrl(pair.left.imageUrl);
+              if (p) paths.push(p);
+            }
+            if (pair.right?.imageUrl) {
+              const p = getStoragePathFromPublicUrl(pair.right.imageUrl);
+              if (p) paths.push(p);
+            }
+          });
+        }
+    
+        // 3. ストレージの画像削除
+        if (paths.length > 0) {
+          const { error: storageError } = await sb
+            .storage
+            .from(BUCKET_NAME)
+            .remove(paths);
+    
+          if (storageError) {
+            console.error(storageError);
+            alert("画像の削除でエラーが発生しました:\n" + JSON.stringify(storageError, null, 2));
+            // ここで return するかどうかは好み。とりあえず続行するならコメントアウトでもOK。
+            // return;
+          }
+        }
+    
+        // 4. galleries のレコード削除
+        const { error: deleteError } = await sb
+          .from("galleries")
+          .delete()
+          .eq("id", id);
+    
+        if (deleteError) {
+          console.error(deleteError);
+          alert("galleries の削除でエラーが発生しました:\n" + JSON.stringify(deleteError, null, 2));
+          return;
+        }
+    
+        // 5. このブラウザの一覧からも削除
+        deleteMyGallery(id);
+    
+        alert("Supabase上のデータと画像を完全に削除しました。");
+      } catch (e) {
+        console.error(e);
+        alert("削除中にエラーが発生しました:\n" + (e.message || e));
+      }
+    }
+
 
     function renderMyGalleriesList() {
       const list = loadMyGalleries();
@@ -384,6 +453,17 @@
           }
         });
         btnRow.appendChild(deleteBtn);
+        
+        const hardDeleteBtn = document.createElement("button");
+        hardDeleteBtn.className = "secondary small";
+        hardDeleteBtn.style.marginLeft = "4px";
+        hardDeleteBtn.textContent = "完全削除（DB+画像）";
+        hardDeleteBtn.addEventListener("click", () => {
+          if (confirm("Supabase上のデータと画像も含めて完全に削除しますか？\nこの操作は取り消せません。")) {
+            hardDeleteGallery(item.id);
+          }
+        });
+        btnRow.appendChild(hardDeleteBtn);
 
         div.appendChild(btnRow);
 
@@ -740,6 +820,19 @@
         viewerEl.classList.add("hidden");
       }
     })();
+    
+    // 公開URLから storage.remove 用のパスを抜き出す
+    function getStoragePathFromPublicUrl(url) {
+      try {
+        const marker = `/object/public/${BUCKET_NAME}/`;
+        const idx = url.indexOf(marker);
+        if (idx === -1) return null;
+        return url.slice(idx + marker.length); // 例: "galleryId/1-left-xxx.jpg"
+      } catch {
+        return null;
+      }
+    }
+
   </script>
 </body>
 </html>
