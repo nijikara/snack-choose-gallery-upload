@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>お菓子二択ギャラリー（Supabase版＋一覧＆編集）</title>
+  <title>お菓子二択ギャラリー（Supabase版 / CONFIGまとめ）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <!-- Supabase JS（CDN） -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -181,21 +181,40 @@
   </div>
 
   <script>
-    // ====== Supabase 設定 ============================================
-    const { createClient } = supabase;
+    // ====== アプリ全体の設定 ==========================================
+    const APP_CONFIG = {
+      supabase: {
+        // ★ここを書き換える
+        url: "https://cxqxwqgskhezckinggow.supabase.co",
+        anonKey: "sb_publishable_KvO6r5kb_ZU2Nq8qTUmMog_VRcK68yp",
+        bucketName: "snack-images",
+      },
+      image: {
+        // 画像の最大サイズ（アップロード時に縮小）
+        maxWidth: 200,
+        maxHeight: 200,
+        mime: "image/jpeg",
+        quality: 0.8,
+      },
+      history: {
+        // このブラウザに保持するギャラリー履歴の最大件数
+        maxMyGalleries: 50,
+      },
+    };
 
-    // TODO: ここを自分のプロジェクトの値に差し替え
-    const SUPABASE_URL = "https://cxqxwqgskhezckinggow.supabase.co";
-    const SUPABASE_ANON_KEY = "sb_publishable_KvO6r5kb_ZU2Nq8qTUmMog_VRcK68yp";
-    const BUCKET_NAME = "snack-images";
+    // ====== Supabase クライアント設定 =================================
+    const { createClient } = supabase;
+    const SUPABASE_URL = APP_CONFIG.supabase.url;
+    const SUPABASE_ANON_KEY = APP_CONFIG.supabase.anonKey;
+    const BUCKET_NAME = APP_CONFIG.supabase.bucketName;
 
     const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    // ====== 画像リサイズ設定 ========================================
-    const MAX_WIDTH = 200;
-    const MAX_HEIGHT = 200;
-    const OUTPUT_MIME = "image/jpeg";
-    const OUTPUT_QUALITY = 0.8;
+    // ====== 画像リサイズ設定 ==========================================
+    const MAX_WIDTH = APP_CONFIG.image.maxWidth;
+    const MAX_HEIGHT = APP_CONFIG.image.maxHeight;
+    const OUTPUT_MIME = APP_CONFIG.image.mime;
+    const OUTPUT_QUALITY = APP_CONFIG.image.quality;
 
     function resizeImage(file, maxWidth, maxHeight, mimeType = OUTPUT_MIME, quality = OUTPUT_QUALITY) {
       return new Promise((resolve, reject) => {
@@ -209,7 +228,7 @@
           const scale = Math.min(
             maxWidth / width,
             maxHeight / height,
-            1
+            1 // もともと小さければそのまま
           );
 
           const canvas = document.createElement("canvas");
@@ -241,7 +260,7 @@
       });
     }
 
-    // ====== URL クエリ ===============================================
+    // ====== URL クエリ ================================================
     const params = new URLSearchParams(window.location.search);
     const galleryIdFromUrl = params.get("gallery"); // viewer 用
     const editGalleryIdFromUrl = params.get("edit"); // 編集モード用
@@ -257,11 +276,9 @@
 
     let pairCount = 0;
 
-    // 編集モードかどうか（元IDは取得にだけ使う。保存時は新IDでINSERT）
-    const isEditMode = !!editGalleryIdFromUrl;
-
-    // ====== localStorage: このブラウザで作ったギャラリー一覧 =========
+    // ====== localStorage: このブラウザで作ったギャラリー一覧 ============
     const MY_GALLERIES_KEY = "mySnackGalleries";
+    const MAX_MY_GALLERIES = APP_CONFIG.history.maxMyGalleries;
 
     function loadMyGalleries() {
       try {
@@ -292,8 +309,8 @@
         title: title || "(無題)",
         createdAt: now
       });
-      // とりあえず最新50件くらいに制限
-      saveMyGalleries(list.slice(0, 50));
+      // 最大件数に制限
+      saveMyGalleries(list.slice(0, MAX_MY_GALLERIES));
       renderMyGalleriesList();
     }
 
@@ -302,7 +319,6 @@
       saveMyGalleries(list);
       renderMyGalleriesList();
     }
-
 
     function renderMyGalleriesList() {
       const list = loadMyGalleries();
@@ -327,6 +343,7 @@
         div.appendChild(meta);
 
         const btnRow = document.createElement("div");
+
         const openBtn = document.createElement("button");
         openBtn.className = "secondary small";
         openBtn.textContent = "開く（投票画面）";
@@ -356,6 +373,7 @@
           alert("URLをコピーしました:\n" + url);
         });
         btnRow.appendChild(copyBtn);
+
         const deleteBtn = document.createElement("button");
         deleteBtn.className = "secondary small";
         deleteBtn.style.marginLeft = "4px";
@@ -385,7 +403,7 @@
       wrapper.className = "pair";
       wrapper.dataset.pairId = pairId;
 
-      // 既存URLがある場合は dataset に保持
+      // 既存URLがある場合は dataset に保持（編集モード用）
       if (existingPair) {
         wrapper.dataset.leftUrl = existingPair.left?.imageUrl || "";
         wrapper.dataset.rightUrl = existingPair.right?.imageUrl || "";
@@ -457,7 +475,13 @@
 
     // ====== Supabase: 画像アップロード（リサイズ付き） ==================
     async function uploadImage(file, galleryId, pairIndex, side) {
-      const resizedBlob = await resizeImage(file, MAX_WIDTH, MAX_HEIGHT);
+      const resizedBlob = await resizeImage(
+        file,
+        MAX_WIDTH,
+        MAX_HEIGHT,
+        OUTPUT_MIME,
+        OUTPUT_QUALITY
+      );
       const ext = "jpg";
       const path = `${galleryId}/${pairIndex}-${side}-${Date.now()}.${ext}`;
 
@@ -472,7 +496,10 @@
         throw error;
       }
 
-      const { data: publicData } = sb.storage.from(BUCKET_NAME).getPublicUrl(path);
+      const { data: publicData } = sb.storage
+        .from(BUCKET_NAME)
+        .getPublicUrl(path);
+
       return {
         path,
         url: publicData.publicUrl
@@ -495,9 +522,8 @@
         return;
       }
 
-      // 編集モードであっても、保存は新しいIDとしてINSERT（元は残す）
+      // 編集モードであっても、新しいIDとしてINSERT（元は残す）
       const galleryId = crypto.randomUUID();
-
       const pairs = [];
 
       try {
@@ -533,9 +559,9 @@
             rightImageUrl = rightUploaded.url;
           }
 
-          // 新規作成モードでは必ずファイル必須。編集モードからの複製なら既存URLだけでもOK
+          // 新規作成でも編集複製でも、最終的にURLが両方埋まっている必要あり
           if (!leftImageUrl || !rightImageUrl) {
-            throw new Error(`ペア ${i + 1} の画像が不足しています。新規作成なら左右両方の画像を指定してください。`);
+            throw new Error(`ペア ${i + 1} の画像が不足しています。左右どちらも画像を指定してください。`);
           }
 
           pairs.push({
@@ -599,12 +625,13 @@
       }
 
       const config = data.config;
-      document.getElementById("viewerTitle").textContent = config.title || data.title || "ギャラリー";
+      document.getElementById("viewerTitle").textContent =
+        config.title || data.title || "ギャラリー";
 
       const container = document.getElementById("viewerContent");
       container.innerHTML = "";
 
-      config.pairs.forEach((pair, index) => {
+      (config.pairs || []).forEach((pair, index) => {
         const pairBox = document.createElement("div");
         pairBox.className = "pair";
 
@@ -693,7 +720,7 @@
       builderMessageEl.textContent = "編集元を読み込みました。この内容をベースに新しいギャラリーとして保存できます。";
     }
 
-    // ====== 画面切り替え ===========================================
+    // ====== 画面切り替え =============================================
     (function init() {
       if (editGalleryIdFromUrl) {
         // 編集モード
