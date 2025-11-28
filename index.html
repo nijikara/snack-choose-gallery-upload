@@ -323,7 +323,7 @@
     // Supabase上のレコード＋画像も含めて完全削除
     async function hardDeleteGallery(id) {
       try {
-        // 1. galleries から設定を取得（画像URLを取る）
+        // 1. galleries から config を取得
         const { data, error } = await sb
           .from("galleries")
           .select("config")
@@ -336,20 +336,36 @@
           return;
         }
     
-        // 2. config から imageUrl を集めて storage パス配列を作成
+        // 2. 画像パスを集める
         let paths = [];
         if (data && data.config && Array.isArray(data.config.pairs)) {
           data.config.pairs.forEach(pair => {
-            if (pair.left?.imageUrl) {
-              const p = getStoragePathFromPublicUrl(pair.left.imageUrl);
-              if (p) paths.push(p);
+            // 左
+            if (pair.left) {
+              if (pair.left.storagePath) {
+                paths.push(pair.left.storagePath);
+              } else if (pair.left.imageUrl) {
+                const p = getStoragePathFromPublicUrl(pair.left.imageUrl);
+                if (p) paths.push(p);
+              }
             }
-            if (pair.right?.imageUrl) {
-              const p = getStoragePathFromPublicUrl(pair.right.imageUrl);
-              if (p) paths.push(p);
+            // 右
+            if (pair.right) {
+              if (pair.right.storagePath) {
+                paths.push(pair.right.storagePath);
+              } else if (pair.right.imageUrl) {
+                const p = getStoragePathFromPublicUrl(pair.right.imageUrl);
+                if (p) paths.push(p);
+              }
             }
           });
         }
+    
+        // 重複削除（同じURLを二重で削除しないように）
+        paths = Array.from(new Set(paths));
+    
+        // デバッグ用：消そうとしているパスをコンソールに出す
+        console.log("Deleting storage paths:", paths);
     
         // 3. ストレージの画像削除
         if (paths.length > 0) {
@@ -361,7 +377,7 @@
           if (storageError) {
             console.error(storageError);
             alert("画像の削除でエラーが発生しました:\n" + JSON.stringify(storageError, null, 2));
-            // ここで return するかどうかは好み。とりあえず続行するならコメントアウトでもOK。
+            // ここで return してもいいし、DB側だけ消す運用でもOK
             // return;
           }
         }
@@ -387,7 +403,6 @@
         alert("削除中にエラーが発生しました:\n" + (e.message || e));
       }
     }
-
 
     function renderMyGalleriesList() {
       const list = loadMyGalleries();
@@ -478,15 +493,28 @@
     function addPair(existingPair) {
       pairCount++;
       const pairId = `pair-${pairCount}`;
-
+    
       const wrapper = document.createElement("div");
       wrapper.className = "pair";
       wrapper.dataset.pairId = pairId;
-
-      // 既存URLがある場合は dataset に保持（編集モード用）
+    
       if (existingPair) {
         wrapper.dataset.leftUrl = existingPair.left?.imageUrl || "";
         wrapper.dataset.rightUrl = existingPair.right?.imageUrl || "";
+    
+        // 既に storagePath が入っている場合はそれを使う
+        // 古いデータで storagePath がない場合は URL から頑張って推論
+        wrapper.dataset.leftPath =
+          existingPair.left?.storagePath ||
+          (existingPair.left?.imageUrl
+            ? getStoragePathFromPublicUrl(existingPair.left.imageUrl)
+            : "");
+    
+        wrapper.dataset.rightPath =
+          existingPair.right?.storagePath ||
+          (existingPair.right?.imageUrl
+            ? getStoragePathFromPublicUrl(existingPair.right.imageUrl)
+            : "");
       }
 
       wrapper.innerHTML = `
@@ -564,25 +592,25 @@
       );
       const ext = "jpg";
       const path = `${galleryId}/${pairIndex}-${side}-${Date.now()}.${ext}`;
-
+    
       const { data, error } = await sb.storage
         .from(BUCKET_NAME)
         .upload(path, resizedBlob, {
           contentType: OUTPUT_MIME
         });
-
+    
       if (error) {
         console.error("upload error", error);
         throw error;
       }
-
+    
       const { data: publicData } = sb.storage
         .from(BUCKET_NAME)
         .getPublicUrl(path);
-
+    
       return {
-        path,
-        url: publicData.publicUrl
+        path,                // ← storage上のパス
+        url: publicData.publicUrl // ← 公開URL
       };
     }
 
@@ -621,22 +649,28 @@
           // 既存URL（編集モードで読み込んだときにセットされる）
           const existingLeftUrl = pairEl.dataset.leftUrl || "";
           const existingRightUrl = pairEl.dataset.rightUrl || "";
+          const existingLeftPath = pairEl.dataset.leftPath || "";
+          const existingRightPath = pairEl.dataset.rightPath || "";
+          
+          let leftImageUrl = existingLeftUrl;
+          let rightImageUrl = existingRightUrl;
+          let leftStoragePath = existingLeftPath;
+          let rightStoragePath = existingRightPath;
 
           if (!pairTitle || !leftLabel || !rightLabel) {
             throw new Error(`ペア ${i + 1} の入力が不足しています。タイトル・ラベルをすべて指定してください。`);
           }
 
-          let leftImageUrl = existingLeftUrl;
-          let rightImageUrl = existingRightUrl;
-
           // 新しいファイルが選ばれていたら、それを優先してアップロード
           if (leftFile) {
             const leftUploaded = await uploadImage(leftFile, galleryId, i + 1, "left");
             leftImageUrl = leftUploaded.url;
+            leftStoragePath = leftUploaded.path;
           }
           if (rightFile) {
             const rightUploaded = await uploadImage(rightFile, galleryId, i + 1, "right");
             rightImageUrl = rightUploaded.url;
+            rightStoragePath = rightUploaded.path;
           }
 
           // 新規作成でも編集複製でも、最終的にURLが両方埋まっている必要あり
@@ -648,11 +682,13 @@
             title: pairTitle,
             left: {
               label: leftLabel,
-              imageUrl: leftImageUrl
+              imageUrl: leftImageUrl,
+              storagePath: leftStoragePath
             },
             right: {
               label: rightLabel,
-              imageUrl: rightImageUrl
+              imageUrl: rightImageUrl,
+              storagePath: rightStoragePath
             }
           });
         }
@@ -821,13 +857,16 @@
       }
     })();
     
-    // 公開URLから storage.remove 用のパスを抜き出す
+    // 公開URLから storage.remove 用のパスを抜き出す（フォールバック用）
     function getStoragePathFromPublicUrl(url) {
       try {
         const marker = `/object/public/${BUCKET_NAME}/`;
         const idx = url.indexOf(marker);
         if (idx === -1) return null;
-        return url.slice(idx + marker.length); // 例: "galleryId/1-left-xxx.jpg"
+        let rel = url.slice(idx + marker.length); // 例: "galleryId/1-left-xxx.jpg?foo=bar"
+        // クエリやハッシュが付いていたら削る
+        rel = rel.split("?")[0].split("#")[0];
+        return rel;
       } catch {
         return null;
       }
