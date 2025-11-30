@@ -221,6 +221,9 @@
 
     <div id="viewerContent"></div>
     <div id="viewerMessage" class="message"></div>
+    
+    <!-- ★追加：投票者一覧表示用 -->
+    <div id="votersList" class="message"></div>
   </div>
 
   <script>
@@ -331,7 +334,9 @@
     const viewerMessageEl = document.getElementById("viewerMessage");
     const builderHeadingEl = document.getElementById("builderHeading");
     const myGalleriesListEl = document.getElementById("myGalleriesList");
-    const voterNameInput = document.getElementById("voterName");
+    const voterNameInput = document.getElementById("voterName");    
+    // ★追加
+    const votersListEl = document.getElementById("votersList");
 
     let pairCount = 0;
     let currentSelections = {};
@@ -768,31 +773,44 @@
       }
     });
 
-    // ====== 投票集計（％込み） =============================
     async function loadVoteSummary(galleryId, pairCount) {
       const summaries = {};
       for (let i = 1; i <= pairCount; i++) {
         summaries[i] = { left: 0, right: 0 };
       }
-
+    
+      // ★ 追加：投票者名の集合
+      const voterNames = new Set();
+    
       const { data, error } = await sb
         .from(VOTES_TABLE)
-        .select("pair_index, choice")
+        .select("pair_index, choice, voter_name")
         .eq("gallery_id", galleryId);
-
+    
       if (error) {
         console.error(error);
         viewerMessageEl.textContent = "投票結果の取得に失敗しました。";
         return;
       }
-
+    
       (data || []).forEach(row => {
         const idx = row.pair_index;
         if (!summaries[idx]) summaries[idx] = { left: 0, right: 0 };
+    
         if (row.choice === "left") summaries[idx].left++;
         if (row.choice === "right") summaries[idx].right++;
+    
+        // ★ 名前をセットに追加（未入力は「匿名」扱い）
+        let name = row.voter_name;
+        if (typeof name !== "string" || name.trim() === "") {
+          name = "匿名";
+        } else {
+          name = name.trim();
+        }
+        voterNames.add(name);
       });
-
+    
+      // ここから下で、各ペアの％表示更新（すでに書いてあるロジックを流用）
       for (let i = 1; i <= pairCount; i++) {
         const summaryEl = document.querySelector(`.vote-summary[data-pair-index="${i}"]`);
         const leftStatsEl = document.querySelector(
@@ -801,10 +819,10 @@
         const rightStatsEl = document.querySelector(
           `.choice-stats[data-pair-index="${i}"][data-side="right"]`
         );
-      
+    
         const s = summaries[i];
         const total = s.left + s.right;
-      
+    
         if (total === 0) {
           if (summaryEl) summaryEl.textContent = "まだ投票はありません。";
           if (leftStatsEl) leftStatsEl.textContent = "";
@@ -812,17 +830,24 @@
         } else {
           const leftPct = Math.round((s.left / total) * 100);
           const rightPct = Math.round((s.right / total) * 100);
-      
-          // 下の細い行は「合計◯票」だけにしてスッキリさせる
+    
           if (summaryEl) summaryEl.textContent = `合計 ${total}票`;
-      
-          // でか文字は各カードの中に
           if (leftStatsEl) leftStatsEl.textContent = `${leftPct}%（${s.left}票）`;
           if (rightStatsEl) rightStatsEl.textContent = `${rightPct}%（${s.right}票）`;
         }
       }
+    
+      // ★ 最後に「投票者一覧」を更新
+      if (votersListEl) {
+        const names = Array.from(voterNames);
+        if (!names.length) {
+          votersListEl.textContent = "投票者: （まだ誰も投票していません）";
+        } else {
+          votersListEl.textContent = "投票者: " + names.join("、");
+        }
+      }
     }
-
+    
     // ====== 投票結果リセット ===============================
     async function resetVotesForGallery() {
       if (!galleryIdFromUrl) return;
@@ -860,9 +885,14 @@
           if (rightStatsEl) rightStatsEl.textContent = "";
         }
 
+        // ★ ここで投票者一覧もリセット
+        if (votersListEl) {
+          votersListEl.textContent = "投票者: （まだ誰も投票していません）";
+        }
+        
         // ゆるい連投フラグも消しておく
         localStorage.removeItem(VOTED_GALLERY_PREFIX + galleryIdFromUrl);
-
+        
         viewerMessageEl.textContent = "投票結果をリセットしました。";
       } catch (e) {
         console.error(e);
