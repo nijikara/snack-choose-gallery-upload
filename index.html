@@ -262,7 +262,6 @@
 
     // ゆるい連投対策 & 名前保存用
     const VOTER_NAME_KEY = "snackVoterName";
-    const VOTED_GALLERY_PREFIX = "snackVoted_";
 
     // ====== 画像リサイズ ==================================
     function resizeImage(file, maxWidth, maxHeight, mimeType = OUTPUT_MIME, quality = OUTPUT_QUALITY) {
@@ -890,9 +889,6 @@
           votersListEl.textContent = "投票者: （まだ誰も投票していません）";
         }
         
-        // ゆるい連投フラグも消しておく
-        localStorage.removeItem(VOTED_GALLERY_PREFIX + galleryIdFromUrl);
-        
         viewerMessageEl.textContent = "投票結果をリセットしました。";
       } catch (e) {
         console.error(e);
@@ -904,55 +900,109 @@
     // ====== 投票送信 ======================================
     async function submitVotes() {
       if (!galleryIdFromUrl) return;
-
+    
       const keys = Object.keys(currentSelections);
       if (keys.length === 0) {
         alert("少なくとも1つのペアで左右どちらかを選んでください。");
         return;
       }
       if (isSubmittingVote) return;
-
-      // ゆるい連投チェック
-      const votedKey = VOTED_GALLERY_PREFIX + galleryIdFromUrl;
-      if (localStorage.getItem(votedKey)) {
-        const cont = confirm("このギャラリーにはすでに投票済みの可能性があります。\nもう一度投票しますか？");
-        if (!cont) {
-          viewerMessageEl.textContent = "投票をキャンセルしました。";
-          return;
-        }
-      }
-
+    
       isSubmittingVote = true;
       viewerMessageEl.textContent = "投票送信中…";
-
+    
       try {
-        const name = voterNameInput?.value.trim() || null;
-        if (name !== null) {
+        // ==== 名前の扱い ====
+        let name = voterNameInput?.value.trim() || "";
+        if (name) {
+          // 名前あり → localStorage に保存・DB には文字列で保存
           localStorage.setItem(VOTER_NAME_KEY, name);
+        } else {
+          // 未入力 → 匿名扱い（DB では null）
+          name = null;
         }
-
+    
         const rows = keys.map(k => ({
           gallery_id: galleryIdFromUrl,
           pair_index: Number(k),
           choice: currentSelections[k],
           voter_name: name
         }));
-
-        const { error } = await sb
-          .from(VOTES_TABLE)
-          .insert(rows);
-
-        if (error) {
-          console.error(error);
-          alert("投票の保存でエラーが発生しました:\n" + JSON.stringify(error, null, 2));
-          viewerMessageEl.textContent = "投票の保存でエラーが発生しました。";
+    
+        // ==== 匿名の場合：毎回 insert ====
+        if (name === null) {
+          const { error } = await sb
+            .from(VOTES_TABLE)
+            .insert(rows);
+    
+          if (error) {
+            console.error(error);
+            alert("投票の保存でエラーが発生しました:\n" + JSON.stringify(error, null, 2));
+            viewerMessageEl.textContent = "投票の保存でエラーが発生しました。";
+          } else {
+            viewerMessageEl.textContent = "匿名で投票を受け付けました！結果を読み込み中…";
+            await loadVoteSummary(galleryIdFromUrl, viewerPairCount);
+            viewerMessageEl.textContent = "集計結果を表示しました。";
+          }
+    
         } else {
-          // 連投フラグ ON
-          localStorage.setItem(votedKey, "1");
-          viewerMessageEl.textContent = "投票ありがとうございます！結果を読み込み中…";
+          // ==== 名前ありの場合：既存票があれば「上書き」 ====
+    
+          // まず、このギャラリー + この名前の票があるか確認
+          const { data: existing, error: selectError } = await sb
+            .from(VOTES_TABLE)
+            .select("id")
+            .eq("gallery_id", galleryIdFromUrl)
+            .eq("voter_name", name);
+    
+          if (selectError) {
+            console.error(selectError);
+            alert("既存の投票の確認でエラーが発生しました:\n" + JSON.stringify(selectError, null, 2));
+            viewerMessageEl.textContent = "投票の確認でエラーが発生しました。";
+            return;
+          }
+    
+          const hasExisting = (existing && existing.length > 0);
+    
+          // 既存票があれば、一度全部削除
+          if (hasExisting) {
+            const { error: deleteError } = await sb
+              .from(VOTES_TABLE)
+              .delete()
+              .eq("gallery_id", galleryIdFromUrl)
+              .eq("voter_name", name);
+    
+            if (deleteError) {
+              console.error(deleteError);
+              alert("過去の投票削除でエラーが発生しました:\n" + JSON.stringify(deleteError, null, 2));
+              viewerMessageEl.textContent = "過去の投票削除でエラーが発生しました。";
+              return;
+            }
+          }
+    
+          // いまの選択内容を insert（新規票 or 更新後の票）
+          const { error: insertError } = await sb
+            .from(VOTES_TABLE)
+            .insert(rows);
+    
+          if (insertError) {
+            console.error(insertError);
+            alert("投票の保存でエラーが発生しました:\n" + JSON.stringify(insertError, null, 2));
+            viewerMessageEl.textContent = "投票の保存でエラーが発生しました。";
+            return;
+          }
+    
+          // メッセージだけ分岐
+          if (hasExisting) {
+            viewerMessageEl.textContent = "投票内容を更新しました！結果を読み込み中…";
+          } else {
+            viewerMessageEl.textContent = "投票ありがとうございます！結果を読み込み中…";
+          }
+    
           await loadVoteSummary(galleryIdFromUrl, viewerPairCount);
           viewerMessageEl.textContent = "集計結果を表示しました。";
         }
+    
       } catch (e) {
         console.error(e);
         alert("投票中にエラーが発生しました:\n" + (e.message || e));
